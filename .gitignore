@@ -1,0 +1,43 @@
+# Environment & Secrets
+.env
+*.pem
+*.key
+
+# WSDL 快照含真實主機名，不入庫；需要時以 scripts/fetch_all_wsdls.py 重新抓取
+references/wsdl/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# uv
+.python-version
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Credentials
+.uof/

@@ -1,0 +1,25 @@
+{
+  "_comment": "VS Code MCP 設定範例（放在 .vscode/mcp.json 或使用者 settings 的 mcp 區段）。env 區塊就是身份綁定處：一個 server = 一個 UOF 帳號。要以不同人員身份操作，複製一份 server 並改 UOF_ACCOUNT / UOF_PASSWORD。改完在 Chat 的工具面板重新整理或重載視窗。為避免密碼明文，下方示範用 inputs 提示輸入；不介意明文可直接寫進 env。",
+  "inputs": [
+    {
+      "id": "uof_password",
+      "type": "promptString",
+      "description": "UOF 登入密碼",
+      "password": true
+    }
+  ],
+  "servers": {
+    "uof": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
+      "env": {
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
+        "UOF_APP_NAME": "your_app_name",
+        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
+        "UOF_ACCOUNT": "your_account",
+        "UOF_PASSWORD": "${input:uof_password}"
+      }
+    }
+  }
+}

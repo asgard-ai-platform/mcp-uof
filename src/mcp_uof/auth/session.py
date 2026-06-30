@@ -1,0 +1,152 @@
+"""
+SessionAuthProvider — UOF Login.aspx form post + cookie jar.
+
+For UOF deployments without PublicAPI module (the SOAP/ASMX backend is absent), the only
+way to drive operations is to log in as a real user would and reuse the session. This
+provider:
+
+  1. Performs the ASP.NET WebForms login (handles __VIEWSTATE round-trip)
+  2. Stores the authenticated `.ASPXFORMSAUTH_UOF` cookie via Playwright's storage_state
+     so the cookie jar can be reused by the Web ops backend (which drives Telerik UI)
+     and survives process restarts.
+  3. Re-logs in transparently when the session expires (typical ASP.NET idle timeout ~20m).
+
+NOTE: The actual browser/Playwright is owned by `ops.web.WebBackend` — this provider only
+*requests* a session refresh and reads identity from the resulting page. We keep the
+Playwright lifecycle in one place to avoid two parallel browsers fighting for the same
+storage_state file.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import stat
+import time
+from pathlib import Path
+from typing import Optional
+
+from .base import AuthMode, AuthProvider
+
+
+from .._log import eprint as _eprint  # 診斷一律走 stderr（共用，勿在各檔複製）
+
+
+CREDENTIALS_DIR = Path(os.path.expanduser("~")) / ".uof"
+DEFAULT_SESSION_TTL = 20 * 60  # ASP.NET 預設 idle timeout = 20 min
+
+
+def _ensure_dir() -> None:
+    if not CREDENTIALS_DIR.exists():
+        CREDENTIALS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+
+class SessionAuthProvider(AuthProvider):
+    mode = AuthMode.SESSION
+
+    def __init__(self) -> None:
+        self._last_validated: float = 0.0
+        self._identity_cached: Optional[str] = None
+        # Logged-in user's display info, populated after successful login.
+        self.logged_in_display_name: Optional[str] = None
+
+    # ── Identity helpers ────────────────────────────────────────────
+    def _identity_key(self) -> str:
+        return "|".join(
+            [
+                os.getenv("UOF_BASE_URL", ""),
+                os.getenv("UOF_ACCOUNT", ""),
+            ]
+        )
+
+    def credentials_file(self) -> str:
+        """Path to the Playwright storage_state JSON for this identity."""
+        account = os.getenv("UOF_ACCOUNT", "anonymous")
+        safe_account = re.sub(r"[^A-Za-z0-9_.-]", "_", account) or "anonymous"
+        digest = hashlib.sha256(self._identity_key().encode("utf-8")).hexdigest()[:8]
+        return str(CREDENTIALS_DIR / f"storage_state-{safe_account}-{digest}.json")
+
+    def required_env_help(self) -> str:
+        return (
+            "- `UOF_BASE_URL`\n"
+            "- `UOF_ACCOUNT`\n"
+            "- `UOF_PASSWORD`"
+        )
+
+    # ── AuthProvider surface ────────────────────────────────────────
+    def ensure_valid(self) -> None:
+        """Trigger the web backend to verify or re-establish the browser session."""
+        # Avoid hammering the server: re-validate at most once per 30s.
+        if time.time() - self._last_validated < 30 and self._identity_cached == self._identity_key():
+            return
+        self._validate_env()
+        # Delegate to ops.web.WebBackend, which owns the Playwright runtime.
+        from ..ops.web import get_web_runtime
+        runtime = get_web_runtime()
+        display_name = runtime.ensure_logged_in()
+        self.logged_in_display_name = display_name
+        self._last_validated = time.time()
+        self._identity_cached = self._identity_key()
+
+    def status_report(self) -> str:
+        account = os.getenv("UOF_ACCOUNT", "(未設定)")
+        base_url = os.getenv("UOF_BASE_URL", "(未設定)")
+        try:
+            self.ensure_valid()
+        except RuntimeError as e:
+            from .base import auth_failure_message
+            return auth_failure_message(str(e))
+        display = self.logged_in_display_name or account
+        return (
+            f"✅ Session 有效，目前以 **{account}**（{display}）的身份操作"
+            f"（認證：網頁 session）。\n"
+            f"🔗 Base URL: {base_url}\n"
+            f"📂 Storage state: `{self.credentials_file()}`\n"
+            f"⚠️ 網頁機制：操作走 Playwright 驅動 UOF 頁面，並非所有工具皆已實作。"
+        )
+
+    def clear(self, all_identities: bool = False) -> None:
+        _ensure_dir()
+        if all_identities:
+            for path in CREDENTIALS_DIR.glob("storage_state-*.json"):
+                path.unlink(missing_ok=True)
+                _eprint(f"[auth.session] 🗑️ 已清除 storage state: {path}")
+        else:
+            p = Path(self.credentials_file())
+            if p.exists():
+                p.unlink()
+                _eprint(f"[auth.session] 🗑️ 已清除 storage state: {p}")
+        # Force web runtime to reset on next call
+        from ..ops.web import reset_web_runtime
+        reset_web_runtime()
+        self._last_validated = 0.0
+        self._identity_cached = None
+
+    # ── Internal ────────────────────────────────────────────────────
+    def _validate_env(self) -> None:
+        missing = [
+            k for k in ("UOF_BASE_URL", "UOF_ACCOUNT", "UOF_PASSWORD")
+            if not os.getenv(k)
+        ]
+        if missing:
+            raise RuntimeError(
+                "UOF_BASE_URL、UOF_ACCOUNT、UOF_PASSWORD 必須全部設定。"
+                f"目前缺少: {', '.join(missing)}"
+            )
+
+    # ── Storage-state metadata sidecar (account, timestamps) ────────
+    def write_metadata(self) -> None:
+        """Write a small JSON next to storage_state recording who logged in + when."""
+        _ensure_dir()
+        meta_path = self.credentials_file() + ".meta"
+        data = {
+            "account": os.getenv("UOF_ACCOUNT", ""),
+            "base_url": os.getenv("UOF_BASE_URL", ""),
+            "identity": self._identity_key(),
+            "logged_in_at": time.time(),
+            "display_name": self.logged_in_display_name or "",
+        }
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.chmod(meta_path, stat.S_IRUSR | stat.S_IWUSR)

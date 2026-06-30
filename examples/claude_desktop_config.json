@@ -1,0 +1,29 @@
+{
+  "_comment": "Claude Desktop MCP 設定範例。env 區塊就是身份綁定處：一個 server entry = 一個 UOF 帳號。要以不同人員身份操作，複製一份 entry 改 UOF_ACCOUNT/UOF_PASSWORD，設定後重啟 Claude Desktop。沒有「模式」可設——每個工具底層用 SOAP 還是網頁取得資料，是 server 內部、開發期決定且對使用者透明的實作細節。注意：清單/搜尋類（query_forms）內部走網頁，需先執行一次 `uv run playwright install chromium`。",
+  "mcpServers": {
+    "uof": {
+      "_comment": "主帳號身份。",
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
+      "env": {
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
+        "UOF_APP_NAME": "your_app_name",
+        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
+        "UOF_ACCOUNT": "your_account",
+        "UOF_PASSWORD": "your_password"
+      }
+    },
+    "uof-manager": {
+      "_comment": "同一台 UOF、以主管身份操作的第二個 entry（示範 context 切換）。可同時啟用。",
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
+      "env": {
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
+        "UOF_APP_NAME": "your_app_name",
+        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
+        "UOF_ACCOUNT": "manager_account",
+        "UOF_PASSWORD": "manager_password"
+      }
+    }
+  }
+}

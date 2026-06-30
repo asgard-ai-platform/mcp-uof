@@ -1,0 +1,58 @@
+[project]
+name = "mcp-uof"
+version = "0.1.0"
+description = "Custom MCP server for UOF (U-Office Force) WebService SOAP API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "mcp-uof contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "fastmcp>=0.1.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "fastapi>=0.136.3",
+    "uvicorn>=0.48.0",
+    "sse-starlette>=3.4.4",
+    "pycryptodome>=3.20.0",
+    "lxml>=5.0.0",
+    "playwright>=1.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/asgard-ai-platform/mcp-uof"
+Repository = "https://github.com/asgard-ai-platform/mcp-uof"
+Issues = "https://github.com/asgard-ai-platform/mcp-uof/issues"
+
+[project.scripts]
+mcp-uof = "mcp_uof.server:main"
+mcp-uof-sse = "mcp_uof.sse_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_uof"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.env",
+    "/references",
+    "/scripts",
+    "/tests",
+]
