@@ -13,20 +13,19 @@ SOAP/ASMX WebService 封裝為語意化的 AI 工具，讓 Claude、VS Code 等 
 
 ### 機制對使用者透明（工具是唯一面向）
 
-對外只有一組固定工具。每個工具底層用 SOAP/PublicAPI 還是 web（Playwright 驅動網頁）取得資料，是
+對外只有一組固定工具。每個工具底層用 SOAP/PublicAPI 還是 httpx 爬網頁取得資料，是
 **開發期決定、對使用者透明**的實作細節——使用者（與 agent）不選、也看不到機制。原則：SOAP 能做的就
-用 SOAP；SOAP 沒有該能力的才用 web 補——目前是 `query_forms`（列清單/搜尋，PublicAPI 無此 API），
-以及**起單時的特定表單**：採購單本體是客製 plugin、中介欄位填不到內容，故 `apply_form` 對它內部改走
-網頁填單；其餘表單走 SOAP。哪張表單走網頁是設計期靜態登錄（`ops/web_apply/registry.py`），使用者
-只挑表單、呼叫同一個 `apply_form`，**不會遇到「用 web 還是 SOAP 起單」的選擇**。沒有使用者可選的
-「模式」。詳見 [docs/architecture.md](docs/architecture.md)。
-
-> 註：`query_forms` 內部走網頁取得清單，需先執行一次 `uv run playwright install chromium`。
+用 SOAP；SOAP 沒有該能力的才用 httpx web 補——目前是 `query_forms`（列清單/搜尋，PublicAPI 無此 API）、
+`get_form_structure` 系列（表單欄位結構）、以及**起單時的特定表單**：採購單本體是客製 plugin、中介欄位
+填不到內容，故 `apply_form` 對它內部改走網頁填單；其餘表單走 SOAP。哪張表單走網頁是設計期靜態登錄
+（`ops/web_apply/registry.py`），使用者只挑表單、呼叫同一個 `apply_form`，
+**不會遇到「用 web 還是 SOAP 起單」的選擇**。沒有使用者可選的「模式」。詳見 [docs/architecture.md](docs/architecture.md)。
 
 其他特點：
 
+- **Alpine Linux 相容**：網頁功能改以 httpx + lxml 實作，不需 Playwright 或 Chromium，可在 musl/Alpine 環境直接部署。
 - **單一身份模型**：一個 Server 程序代表一位 UOF 使用者，身份在設定時綁定（見[身份模型](#身份模型)）。
-- **認證跟著工具的機制走**：SOAP 工具用 RSA Token（含失效自動刷新）、`query_forms` 用 web cookie session，彼此獨立、由用到的機制惰性取得；`query_forms` 因此**不需 SOAP token**（無 PublicAPI 站台也能用）。登入失敗回固定的設定檢查提示。
+- **認證跟著工具的機制走**：SOAP 工具用 RSA Token（含失效自動刷新）、httpx web 工具用 cookie session，彼此獨立、由用到的機制惰性取得；httpx web 工具因此**不需 SOAP token**（無 PublicAPI 站台也能用）。登入失敗回固定的設定檢查提示。
 
 ### 起單能力範圍
 
@@ -35,8 +34,8 @@ SOAP/ASMX WebService 封裝為語意化的 AI 工具，讓 Claude、VS Code 等 
 - **SOAP 中介起單**（原生設計的表單）：單站自由流程（指定一位第一站簽核者）＋基本欄位型別（文字、
   自動編號、可空欄位、日期、單選、不帶檔案的附檔欄位）＋**明細（DataGrid，以列清單帶入）**。
   尚未支援：實際附檔上傳、多站流程與並簽/會簽、固定流程逐站推進。
-- **網頁起單**（本體是客製 plugin、中介欄位填不到內容的表單，如採購單）：以 Playwright 驅動網頁
-  完整填單送出（主旨/供應商/明細等）；較慢、較依賴頁面結構，簽核者由表單自身流程決定。
+- **網頁起單**（本體是客製 plugin、中介欄位填不到內容的表單，如採購單）：以 httpx + lxml 爬網頁
+  完整填單送出（主旨/供應商/明細等）；較依賴頁面結構，簽核者由表單自身流程決定。
 
 > 重要：可填的欄位僅限該表單**對外開放的中介欄位**（即 `get_form_structure_by_id` 回傳的欄位），
 > 這可能少於 UOF 網頁上看到的完整表單。若網頁欄位未在後台對應為中介欄位，API 便無法填，

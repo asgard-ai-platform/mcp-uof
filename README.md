@@ -18,15 +18,15 @@ Built for Claude Code, Claude Desktop, VS Code, and any MCP-compatible client. I
 
 - **12 ready-to-use tools** for UOF workflow operations, including authentication checks, form discovery, schema lookup, workflow preview, form submission, task status, task result, and task closure.
 - **MCP server** over stdio for local AI clients, plus an optional SSE server for HTTP integrations.
-- **Tool-first interface**: users call the same tools regardless of whether the implementation uses SOAP/PublicAPI or browser automation internally.
+- **Tool-first interface**: users call the same tools regardless of whether the implementation uses SOAP/PublicAPI or httpx web scraping internally.
 - **Single identity model**: one server process represents one UOF account configured through environment variables.
-- **SOAP and web support**: SOAP is used where PublicAPI supports the operation; Playwright-backed web automation fills gaps such as form listing and selected custom form submission flows.
+- **SOAP and httpx web support**: SOAP is used where PublicAPI supports the operation; httpx + lxml web scraping fills gaps such as form listing, form structure lookup, and form submission. No Playwright or Chromium required — works on Alpine Linux.
 
 ## API Reference
 
 This project targets UOF first-generation SOAP/ASMX services and selected web flows.
 
-- Authentication: UOF account/password encrypted with the configured RSA public key for SOAP token access; web flows reuse a browser session.
+- Authentication: UOF account/password encrypted with the configured RSA public key for SOAP token access; httpx web flows maintain a cookie session independently.
 - Base URL: configured with `UOF_BASE_URL`, for example `https://your-uof-domain.com/VirtualPath`.
 - Required UOF settings: see [docs/configuration.md](docs/configuration.md).
 
@@ -51,7 +51,6 @@ git clone https://github.com/asgard-ai-platform/mcp-uof.git
 cd mcp-uof
 uv sync
 cp .env.example .env
-uv run playwright install chromium
 ```
 
 Set the required environment variables:
@@ -147,7 +146,7 @@ Important behavior and constraints:
 - UOF first-generation PublicAPI does not provide an inbox or pending-task list API. Users must provide a TaskId from the UOF UI or notification email.
 - UOF does not provide a general per-step approval API. Single-step free-flow approvals can be represented through `terminate_task` with `Adopt` or `Reject` when used by the current signer.
 - `terminate_task` can overwrite already-closed results at the API layer; this server checks task status first and blocks repeated closure.
-- Some form submissions use web automation when SOAP intermediary fields cannot represent the full form body.
+- `query_forms`, `get_form_structure`, and `apply_form` use httpx + lxml web scraping when SOAP intermediary fields cannot represent the full form body. No browser or Playwright installation required.
 
 See [docs/tools.md](docs/tools.md) for full tool specs, role model, examples, and operational boundaries.
 

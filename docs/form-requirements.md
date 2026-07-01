@@ -34,6 +34,6 @@
 採購單已有版本、可起單查詢，但對外中介欄位只開放 4 個（表單編號、主要欄位、備註、附件），
 SOAP `SendForm` 無法填網頁上的主旨、供應商、幣別、採購明細等必填欄位。
 
-本 repo 已針對採購單系列登錄 `ops/web_apply` handler：`apply_form` 會透明改以 Playwright 填網頁表單，
+本 repo 已針對採購單系列登錄 `ops/web_apply` handler：`apply_form` 會透明改以 httpx + lxml 爬網頁表單，
 可完整填主旨、供應商、幣別、付款條件、儲存地點、運送方式、到貨日與明細。若未來新增其他客製 plugin
 表單，仍需逐單補 web handler，或在 UOF 後台補齊中介欄位後走 SOAP。

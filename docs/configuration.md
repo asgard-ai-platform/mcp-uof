@@ -9,22 +9,22 @@
 
 ## 環境變數
 
-沒有「模式」要設：每個工具底層用 SOAP 還是網頁取得資料，是 server 內部決定、對使用者透明的。
-**認證跟著工具的機制走**：SOAP 工具用 token、網頁工具（`query_forms`）用 session（帳密登入），
-兩者各自獨立。下表的「Required」因此分「全部工具」與「僅 SOAP 工具」兩種。
+沒有「模式」要設：每個工具底層用 SOAP 還是 httpx 網頁取得資料，是 server 內部決定、對使用者透明的。
+**認證跟著工具的機制走**：SOAP 工具用 token、httpx web 工具（`query_forms` / `get_form_structure` /
+`apply_form`）用 cookie session（帳密登入），兩者各自獨立。下表的「Required」因此分「全部工具」與「僅 SOAP 工具」兩種。
 
 | Variable | Required | Description |
 |---|---:|---|
 | `UOF_BASE_URL` | Yes（全部） | UOF 站台 URL，含虛擬路徑、不含尾斜線（例：`https://host/UOF`） |
 | `UOF_ACCOUNT` | Yes（全部） | MCP Server 執行時的操作帳號 |
 | `UOF_PASSWORD` | Yes（全部） | 操作帳號密碼 |
-| `UOF_APP_NAME` | 僅 SOAP 工具 | 外部系統代號（UOF「一般組態設定 → 整合服務 → API」），SOAP 取 Token 用；`query_forms` 不需 |
-| `UOF_RSA_PUBLIC_KEY` | 僅 SOAP 工具 | RSA 公鑰（Base64），SOAP 加密帳密用；`query_forms` 不需 |
+| `UOF_APP_NAME` | 僅 SOAP 工具 | 外部系統代號（UOF「一般組態設定 → 整合服務 → API」），SOAP 取 Token 用；httpx web 工具不需 |
+| `UOF_RSA_PUBLIC_KEY` | 僅 SOAP 工具 | RSA 公鑰（Base64），SOAP 加密帳密用；httpx web 工具不需 |
 | `UOF_VERIFY_SSL` | No | `true`（預設）嚴格驗證；自簽憑證測試環境才用 `false` |
 | `UOF_TOKEN_TTL` | No | SOAP 機制的 Token 快取秒數覆寫 |
 
-> `query_forms`（列清單/搜尋）走網頁，只需 `UOF_BASE_URL`/`UOF_ACCOUNT`/`UOF_PASSWORD` + 先安裝瀏覽器
-> `uv run playwright install chromium`，**不需要 SOAP token**（也因此沒有 PublicAPI 的站台仍能用 `query_forms`）。
+> `query_forms` / `get_form_structure` / `apply_form` 走 httpx web，只需 `UOF_BASE_URL` / `UOF_ACCOUNT` /
+> `UOF_PASSWORD`，**不需要 SOAP token**（沒有 PublicAPI 的站台仍能用這些工具），也不需要安裝 Playwright 或 Chromium。
 > 舊版的 `UOF_OPS_MODE` / `UOF_AUTH_MODE` 已不再使用；即使保留也會被忽略。
 
 ## 測試專用變數（tests/）

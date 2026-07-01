@@ -7,17 +7,18 @@
 對外只有一組固定的 MCP 工具（`uof_custom_*`）。**每個工具底層用哪種「機制」取得資料，是開發期就
 決定、對使用者完全透明的實作細節**——使用者（與 agent）只面對「有哪些工具」，不選、也看不到機制。
 
-兩種機制：
+三種機制：
 
 | 機制 | 怎麼操作 | 認證 |
 |---|---|---|
-| SOAP | 呼叫 SOAP / PublicAPI（`*.asmx`） | token：RSA 帳密 → GetToken |
-| web  | 以 Playwright 驅動 UOF 網頁 | session：Login.aspx 登入 + cookie |
+| soap | 呼叫 SOAP / PublicAPI（`*.asmx`） | token：RSA 帳密 → GetToken |
+| http_web | httpx + lxml 爬 UOF 網頁 | session：Login.aspx 登入 + cookie |
+| web | Playwright 驅動 UOF 網頁（legacy，目前無工具綁定） | session：Login.aspx 登入 + cookie |
 
 **綁定原則（開發者在實作工具時決定）**：能用 SOAP/PublicAPI 做的就用 SOAP；SOAP 沒有該能力的，才用
-web 補。走 web 的有：`query_forms`（列清單/搜尋，PublicAPI 無此 API）；以及**起單時的特定表單**——
-採購單本體是客製 plugin、中介欄位填不到內容，故 `apply_form` 對它改走網頁填單（見下「起單的兩軸分派」）。
-其餘走 SOAP。
+http_web 補。走 http_web 的有：`query_forms`（列清單/搜尋，PublicAPI 無此 API）、`get_form_structure`
+系列；以及**起單時的特定表單**——採購單本體是客製 plugin、中介欄位填不到內容，故 `apply_form` 對它
+改走網頁填單（見下「起單的兩軸分派」）。其餘走 SOAP。
 
 > 沒有使用者可選的「模式」。也沒有「用 web 還是 SOAP 起單」的選擇——使用者只挑表單、呼叫工具，
 > 走哪種機制是內部、對使用者透明的決定。舊版的 `UOF_OPS_MODE` / `UOF_AUTH_MODE` 已移除，設定也會被忽略。
@@ -29,8 +30,9 @@ MCP client (Claude Desktop / VS Code)
   -> mcp_uof.server                 FastMCP 工具（uof_custom_*），定義固定
   -> mcp_uof.ops.get_backend()      永遠回傳同一個 OpsRouter
   -> OpsRouter（依 ops/router.py 的 BINDING 靜態委派）
-       ├─ SoapBackend  -> domains/wkf/service.py -> soap_client (lxml+httpx) -> UOF PublicAPI(*.asmx)
-       └─ WebBackend   -> Playwright(單一 worker thread) -> UOF 網頁（query_forms）
+       ├─ SoapBackend      -> domains/wkf/service.py -> soap_client (lxml+httpx) -> UOF PublicAPI(*.asmx)
+       ├─ HttpWebBackend  -> HttpSession (httpx+lxml) -> UOF 網頁（query_forms / get_form_structure / apply_form）
+       └─ WebBackend      -> Playwright (legacy，目前無工具綁定)
 ```
 
 工具層只呼叫 `get_backend().<method>(...)`，從不直接碰機制實作。
@@ -71,8 +73,9 @@ OpsRouter.<tool>()  -> 依 BINDING 委派到 SoapBackend 或 WebBackend
 - **SOAP → TokenAuthProvider**：RSA 加密 `UOF_ACCOUNT`/`UOF_PASSWORD` 呼叫 `Authentication.asmx` 的
   `GetToken`，記憶體＋磁碟雙層快取。**失效自動刷新**：Token 伺服器端有效期可能短於本地 TTL，失效時
   WKF 呼叫回 HTTP 500；`SoapBackend._call` 偵測到就 `fetch_token(force_refresh=True)` 重試一次。
-- **web → SessionAuthProvider**：Login.aspx 表單登入取得 cookie，存為 Playwright storage_state；
-  idle timeout 後透明重登。Playwright 跑在單一專屬 worker thread，避免與 FastMCP 的 asyncio loop 衝突。
+- **http_web → SessionAuthProvider**：`HttpSession`（httpx.Client）POST `Login.aspx` 取得 cookie；
+  每次 GET/POST 若被重導至 Login.aspx 就自動重新登入後重試。執行緒安全，可直接在任意執行緒呼叫。
+- **web（legacy Playwright）→ SessionAuthProvider**：存為 Playwright storage_state；目前無工具綁定。
 
 ### 身份模型（單一身份，設定時綁定）
 
@@ -121,7 +124,7 @@ mcp-uof/
 ├── src/mcp_uof/
 │   ├── server.py        # MCP Server 入口，註冊 uof_custom_* 工具，派發到 get_backend()
 │   ├── soap_client.py   # SOAP 請求組裝與回傳解析（SOAP 機制用）
-│   ├── ops/             # 操作面：router(BINDING 綁定)、base(協定)、soap、web(Playwright)
+│   ├── ops/             # 操作面：router(BINDING 綁定)、base(協定)、soap、http_web(httpx)、web(Playwright legacy)
 │   ├── auth/            # 認證（機制前提）：base、token、session
 │   └── domains/         # 業務邏輯：system、wkf（service.py）
 ├── tests/               # 三層測試：smoke（離線）/ e2e（服務層）/ mounted（真實掛載 MCP）

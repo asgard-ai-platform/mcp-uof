@@ -32,16 +32,16 @@ uv run mcp-uof
 
 ## 0.5 機制對使用者透明（不需選擇）
 
-對外只有一組固定工具。每個工具底層用 SOAP/PublicAPI 還是 web（Playwright 網頁）取得資料，是
+對外只有一組固定工具。每個工具底層用 SOAP/PublicAPI 還是 httpx 爬網頁取得資料，是
 server 內部、開發期決定且對使用者透明的實作細節——**你不需要、也無法選擇**。原則：SOAP 能做的用
-SOAP；SOAP 沒有該能力的（目前只有 `query_forms` 列清單/搜尋，因 UOF PublicAPI 無此 API）才用 web 補。
-沒有「模式」要設。
+SOAP；SOAP 沒有該能力的才用 httpx web 補（目前：`query_forms` 列清單/搜尋、`get_form_structure` 系列、
+採購單系列的 `apply_form`）。沒有「模式」要設，也不需要安裝 Playwright 或 Chromium。
 
 對綁定的實際影響：
 
 - 一律填 `UOF_BASE_URL` / `UOF_ACCOUNT` / `UOF_PASSWORD`；**SOAP 工具**另需 `UOF_APP_NAME` / `UOF_RSA_PUBLIC_KEY`。
-- **認證跟著工具的機制走**：SOAP 工具驗 token、`query_forms` 驗 web session（帳密登入），彼此獨立——
-  所以 `query_forms` **不需要 SOAP token**，沒有 PublicAPI 的站台仍能用它（需先 `uv run playwright install chromium`）。
+- **認證跟著工具的機制走**：SOAP 工具驗 token、httpx web 工具（`query_forms` / `get_form_structure` / `apply_form`）驗 cookie session（帳密登入），彼此獨立——
+  所以 httpx web 工具**不需要 SOAP token**，沒有 PublicAPI 的站台仍能用；不需安裝 Playwright 或 Chromium。
 - 舊版的 `UOF_OPS_MODE` / `UOF_AUTH_MODE` 已不再使用；即使保留也會被忽略，不影響運作。
 
 ---

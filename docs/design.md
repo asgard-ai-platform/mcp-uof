@@ -6,8 +6,8 @@
 
 ## 一句話原則
 
-對外只有「工具」。每個工具底層用 **Web Service（SOAP/PublicAPI）** 還是 **網頁（Playwright）**，是
-開發期決定、寫在 `BINDING` 的綁定，對使用者透明。能用 SOAP 做的用 SOAP；SOAP 沒有該 API 的才用網頁。
+對外只有「工具」。每個工具底層用 **Web Service（SOAP/PublicAPI）** 還是 **httpx web（lxml 解析）**，是
+開發期決定、寫在 `BINDING` 的綁定，對使用者透明。能用 SOAP 做的用 SOAP；SOAP 沒有該 API 的才用 httpx web。
 
 ## 設計原則：機制由開發者在設計期決定
 
@@ -105,29 +105,24 @@ SOAP 工具的業務邏輯在 `domains/wkf/service.py`；`SoapBackend`（`ops/so
 > 因此 `check_auth` 訊息有兩段：token 就緒與否 + session 就緒與否。即使 token 失敗，只要 session 正常，
 > 使用者就知道走 web 的工具（`query_forms`）仍可用。
 
-## `query_forms` 抓取流程與所需資源
+## httpx web 工具抓取流程（`query_forms` / `get_form_structure` / `apply_form`）
 
-流程（`ops/web.py`：`WebBackend.query_forms` → `WebRuntime.search_forms`）：
+實作在 `ops/http_web.py`：`HttpSession`（執行緒安全的 httpx.Client）+ `HttpWebBackend`。
 
-1. 啟動無頭 Chromium，載入快取 cookie（storage_state）。
-2. 若未登入 → POST `Login.aspx`（帳密來自 env），存回 cookie。
-3. 開 `MyFormList.aspx?item=FormQuery`，設定 Telerik RadDatePicker 日期區間（隱藏 + 顯示雙 input）
-   與關鍵字，送出查詢。
-4. 解析 RadGrid 每一列 → TaskId / 單號 / 狀態 / 申請人 / 申請時間 / 結案時間。
+流程：
+
+1. 首次呼叫 → GET `Login.aspx` 取得 `__VIEWSTATE`，POST 帳密登入，session cookie 由 httpx.Client 自動維持。
+2. 每次 GET/POST 若被重導至 `Login.aspx`（session 過期），自動重新登入後重試一次。
+3. 各工具：
+   - `query_forms`：POST `MyFormList.aspx?item=FormQuery`（帶 Telerik RadDatePicker 雙 input 格式）→ 解析 RadGrid 列。
+   - `get_form_structure`：GET `AddFormScript.aspx?formId=…&formVersionId=…` → 解析 `table.fieldWidth` 區塊。
+   - `apply_form`：GET `AddFormScript.aspx?mode=apply` → 跟隨 redirect 至 `FirstSite.aspx` → 填欄位 → POST 送出；以 `dialog.close()` 出現於 response 作為成功訊號。
 
 所需資源/設定：
 
-- `uv run playwright install chromium`（只需一次）。
-- `UOF_BASE_URL` / `UOF_ACCOUNT` / `UOF_PASSWORD`；`~/.uof` 可寫（存 cookie）。
-- 依賴 UOF 網頁的頁面與選擇器——**站台換版/換佈景可能要調整**（這是網頁機制的本質脆弱點）。
-- Playwright 跑在單一專屬 worker thread，與 FastMCP 的 asyncio loop 隔離。
-
-## 網頁工具的 retry 機制
-
-網頁機制對應 SOAP 的「token 失效自動刷新」，提供對等的韌性：`WebBackend._call_web(fn)` 跑網頁操作，
-若**中途被導回 Login（快取 cookie 通過初檢卻已在伺服器端過期）或拋例外**，就呼叫
-`WebRuntime.force_relogin()` 強制重登後**重試一次**，使用者無感。新增網頁工具時一律經 `_call_web`
-呼叫，即可免費獲得此 retry。
+- `UOF_BASE_URL` / `UOF_ACCOUNT` / `UOF_PASSWORD`。
+- **不需要 Playwright 或 Chromium**——純 httpx + lxml，Alpine Linux / musl 相容。
+- 依賴 UOF 網頁的頁面與選擇器——**站台換版/換佈景可能要調整**（網頁機制的本質脆弱點）。
 
 ## 怎麼新增一個工具（可直接 follow）
 
@@ -135,11 +130,11 @@ SOAP 工具的業務邏輯在 `domains/wkf/service.py`；`SoapBackend`（`ops/so
    - 走 **Web Service**：在 `domains/wkf/service.py` 加函式（`uof_client.call(endpoint_path=WKF_ENDPOINT,
      method_name="<ASMX method>", params={...})` 打 API、解析回傳字串），再在 `ops/soap.py` 的
      `SoapBackend` 加方法，經 `self._call(...)` 呼叫它（`_call` 已含 token 失效重試）。
-   - 走 **網頁**：在 `ops/web.py` 的 `WebRuntime` 加 scrape 方法（Playwright 操作頁面），再在
-     `WebBackend` 加方法，經 `self._call_web(...)` 呼叫它（`_call_web` 已含 session 失效重登重試）。
+   - 走 **httpx web**：在 `ops/http_web.py` 的 `HttpSession` 加 scrape 方法（httpx GET/POST + lxml 解析），
+     再在 `HttpWebBackend` 加方法；`get()` / `post()` 已含 session 失效重登重試。
 2. **宣告介面**：在 `ops/base.py` 的 `OpsBackend` 加上這個 `@abstractmethod`。
 3. **登記綁定**：在 `ops/router.py` 的 `OpsRouter` 加同名方法 `return self._route("<name>", ...)`，
-   並在 `BINDING` 標記它走 `"soap"` 還是 `"web"`。
+   並在 `BINDING` 標記它走 `"soap"`、`"http_web"` 還是 `"web"`（legacy Playwright，目前無工具綁定）。
 4. **對外暴露**：在 `server.py` 加一個 `@mcp.tool` 的 `uof_custom_<name>`，內部 `return get_backend().<name>(...)`，
    並寫清楚 docstring（何時用、限制；**不要**提機制/模式）。
 
@@ -155,10 +150,10 @@ SOAP 工具的業務邏輯在 `domains/wkf/service.py`；`SoapBackend`（`ops/so
 | 工具 | SOAP method | 對應網頁端點 | 網頁實作狀態 |
 |---|---|---|---|
 | （登入/認證） | `GetToken` | `Login.aspx` | ✅ 已用（session 登入） |
-| `query_forms` | （無 API） | `MyFormList.aspx?item=FormQuery` | ✅ 已綁 |
-| `get_form_list` | `GetFormList` | `MyFormList.aspx?item=FormQuery` | ✅ 已有 scrape（未綁） |
-| `get_form_structure` | `GetFormStructure` | `AddFormScript.aspx` | ✅ 已有 scrape；已對 registry 命中的網頁起單表單回 handler schema |
-| `get_form_structure_by_id` | `GetFormStructureByFormId` | `AddFormScript.aspx` ＋ `ApplyFormList.aspx`（formId↔version 對照） | ✅ 已有 scrape；已對 registry 命中的網頁起單表單回 handler schema |
+| `query_forms` | （無 API） | `MyFormList.aspx?item=FormQuery` | ✅ 已綁（http_web） |
+| `get_form_list` | `GetFormList` | `MyFormList.aspx?item=FormQuery` | ✅ 已有 scrape（http_web，未綁） |
+| `get_form_structure` | `GetFormStructure` | `AddFormScript.aspx` | ✅ 已綁（http_web） |
+| `get_form_structure_by_id` | `GetFormStructureByFormId` | `AddFormScript.aspx` ＋ `ApplyFormList.aspx`（formId↔version 對照） | ✅ 已綁（http_web） |
 | `get_task_data` | `GetTaskData` | `FormPrint.aspx` | ✅ 已有 scrape（未綁） |
 | `get_task_result` | `GetTaskResult` | `ViewFormTemp.aspx` | ✅ 已有 scrape（未綁） |
 | `get_external_form_list` | `GetExternalFormList` | （無對應網頁：admin 後台 DB 旗標，前端看不到） | ❌ 無對應 |
@@ -167,16 +162,18 @@ SOAP 工具的業務邏輯在 `domains/wkf/service.py`；`SoapBackend`（`ops/so
 | `terminate_task`（寫入） | `TerminateTask` | 表單詳細頁「強制結案/作廢」按鈕 | ❌ 待實作；**寫入不開自動 fallback** |
 | `sign_next`（寫入） | `SignNext2` | 固定流程簽核 UI | ❌ 待實作；**寫入不開自動 fallback** |
 
-> 網頁端點常數集中在 `ops/web.py` 頂部（`FORM_PRINT_PATH` / `FORM_QUERY_PATH` / `VIEW_FORM_TEMP_PATH` /
-> `APPLY_FORM_LIST_PATH` / `ADD_FORM_SCRIPT_PATH`）；`Login.aspx` 登入在 `auth/session.py` + `ops/web.py`。
-> 讀取類的網頁實作其實已經存在（`WebBackend.scrape_*`）。要啟用 fallback，主要是把 `BINDING` 改成有序鏈，
-> 再於 router 補上「只在結構性錯誤時退、業務錯誤不退」的判斷（理由見「設計原則」一節的邊界說明）。
+> httpx web 端點常數集中在 `ops/http_web.py` 頂部；Playwright 版的端點常數在 `ops/web.py` 頂部（保留供
+> 日後需要時參考）。`Login.aspx` 登入在 `auth/session.py`（Playwright 用）與 `ops/http_web.py`（httpx 用）。
+> 要為目前 SOAP 工具加 httpx fallback，主要是把 `BINDING` 改成有序鏈，再於 router 補上「只在結構性錯誤
+> 時退、業務錯誤不退」的判斷（理由見「設計原則」一節的邊界說明）。
 
 ## 機制覆蓋現況
 
-- **Web Service**：涵蓋 SOAP 可完成的查詢、起單與簽核/結案工具；一般表單的 `apply_form` 仍走 SOAP 中介。
-- **網頁**：`query_forms` 已綁定；`apply_form` / `preview_workflow` / `get_form_structure(_by_id)` 對
-  `ops/web_apply/registry.py` 命中的表單（目前採購單系列）走 web handler；另有多個讀取類 scrape 方法已實作但未綁成 fallback（見上表）。
+- **Web Service（SOAP）**：涵蓋 SOAP 可完成的查詢、起單與簽核/結案工具；一般表單的 `apply_form` 仍走 SOAP 中介。
+- **httpx web**：`query_forms` / `get_form_structure` / `get_form_structure_by_id` 已綁定；`apply_form`
+  對 `ops/web_apply/registry.py` 命中的表單（目前採購單系列）走 web handler；`apply_form_web` 支援
+  text / select / radio / datePicker / dialog（供應商等彈窗）欄位，不支援實際附檔上傳與 DataGrid。
+  另有多個讀取類 scrape 方法已實作但未綁成 fallback（見上表）。
 - **未來：支援無 PublicAPI 或 PublicAPI 不穩的站台。** 這是一筆明確的逐工具工作，分兩步，不是修 bug：
 
   1. **認證層**：在 `BINDING` 把可行的讀取類工具改綁成有序的 `("soap", "web")`（SOAP 在前）。
