@@ -913,8 +913,16 @@ class WebRuntime:
 _runtime: Optional[WebRuntime] = None
 _runtime_lock = threading.Lock()
 
+_BROWSER_ENABLED = os.environ.get("UOF_BROWSER_ENABLED", "true").lower() not in ("false", "0", "no")
+
 
 def get_web_runtime() -> WebRuntime:
+    if not _BROWSER_ENABLED:
+        raise RuntimeError(
+            "瀏覽器功能已停用（UOF_BROWSER_ENABLED=false）。\n"
+            "此工具需要 Playwright 支援。若平台環境已備妥 playwright wheel，"
+            "請移除 UOF_BROWSER_ENABLED=false 或改設為 true 後重啟。"
+        )
     global _runtime
     with _runtime_lock:
         if _runtime is None:
