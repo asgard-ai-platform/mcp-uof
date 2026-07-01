@@ -1,0 +1,53 @@
+name: Feature Request
+description: Suggest an improvement or new capability.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Do not include private UOF data, credentials, or customer-specific details.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or integration problem should this solve?
+      placeholder: Describe the current limitation or workflow pain point.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: What should change?
+      placeholder: Describe the behavior, tool, configuration, or documentation change you want.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Workflow (WKF) tools
+        - Document management (DMS) tools
+        - EIP tools
+        - UChat tools
+        - System tools
+        - Ops routing (SOAP / web)
+        - Authentication
+        - SSE transport
+        - Documentation
+        - Packaging
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Are there existing workarounds or alternative designs?
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any sanitized examples, links, or constraints that help explain the request.

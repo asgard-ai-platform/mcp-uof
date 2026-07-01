@@ -1,0 +1,77 @@
+name: Bug Report
+description: Report a reproducible problem with the MCP server.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include accounts, passwords, RSA keys, tokens, or private UOF data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+      placeholder: Describe the observed behavior and why it is a problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps To Reproduce
+      description: Provide the smallest set of steps that reproduces the issue.
+      placeholder: |
+        1. Configure ...
+        2. Run ...
+        3. Call tool ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What happened instead? Include sanitized logs if helpful.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime Mode
+      options:
+        - stdio
+        - SSE
+        - manual test script
+        - other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version Or Commit
+      description: Package version, git commit, or branch name.
+      placeholder: v0.1.0 or main@abcdef0
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, uv version, and relevant sanitized configuration.
+      placeholder: |
+        OS: macOS 15
+        Python: 3.12.x
+        uv: 0.x.x
+        UOF_VERIFY_SSL: true
+    validations:
+      required: true
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other sanitized context that may help diagnose the issue.
