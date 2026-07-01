@@ -30,7 +30,7 @@ BINDING = {
     "apply_form": "soap",
     "terminate_task": "soap",
     "sign_next": "soap",
-    "query_forms": "web",      # UOF PublicAPI 無清單/搜尋 API → 透明改用網頁
+    "query_forms": "http_web",  # UOF PublicAPI 無清單/搜尋 API → httpx+lxml 網頁爬取
 }
 
 
@@ -59,6 +59,7 @@ class OpsRouter(OpsBackend):
     def __init__(self) -> None:
         self._soap = None
         self._web = None
+        self._http_web = None
 
     # ── 機制（惰性、單例）──────────────────────────────────────────
     @property
@@ -75,8 +76,20 @@ class OpsRouter(OpsBackend):
             self._web = WebBackend()
         return self._web
 
+    @property
+    def http_web(self) -> OpsBackend:
+        if self._http_web is None:
+            from .http_web import HttpWebBackend
+            self._http_web = HttpWebBackend()
+        return self._http_web
+
     def _mech(self, op: str) -> OpsBackend:
-        return self.web if BINDING[op] == "web" else self.soap
+        m = BINDING[op]
+        if m == "web":
+            return self.web
+        if m == "http_web":
+            return self.http_web
+        return self.soap
 
     def _route(self, op: str, *args, **kwargs) -> str:
         return getattr(self._mech(op), op)(*args, **kwargs)

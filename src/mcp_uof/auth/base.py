@@ -117,8 +117,8 @@ def reset_provider_for_tests() -> None:
 
 
 def _provider_for(mechanism: str) -> AuthProvider:
-    """機制 → 它需要的認證 provider。soap→token、web→session。"""
-    if mechanism == "web":
+    """機制 → 它需要的認證 provider。soap→token、web/http_web→session。"""
+    if mechanism in ("web", "http_web"):
         return get_session_provider()
     return get_token_provider()  # "soap" 與未知值都用 token（與舊行為一致）
 

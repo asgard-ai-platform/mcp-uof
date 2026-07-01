@@ -28,8 +28,10 @@ def resolve_version(form_version_id: str) -> Optional[FormApplyEntry]:
     if not form_version_id:
         return None
     try:
-        from ..web import get_web_runtime
-        form_id = get_web_runtime().form_id_for_version(form_version_id)
+        from ..http_web import get_http_session
+        mapping = get_http_session().get_form_id_version_mapping()
+        reverse = {v: k for k, v in mapping.items()}
+        form_id = reverse.get(form_version_id.lower(), "")
     except Exception as e:
         raise VersionResolveError(f"無法反查 formVersionId={form_version_id} 的 formId：{e}") from e
     if not form_id:
