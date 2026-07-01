@@ -55,7 +55,7 @@ def main() -> int:
             failures += 1
 
     # 1) 綁定表（供認證閘判斷）
-    check("mechanisms_for(query_forms) = ['web']", mechanisms_for("query_forms") == ["web"])
+    check("mechanisms_for(query_forms) = ['http_web']", mechanisms_for("query_forms") == ["http_web"])
     check("mechanisms_for(apply_form) = ['soap']", mechanisms_for("apply_form") == ["soap"])
     check("mechanisms_for(get_form_list) = ['soap']", mechanisms_for("get_form_list") == ["soap"])
 

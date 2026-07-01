@@ -18,7 +18,7 @@ from mcp_uof.ops import get_backend
 from mcp_uof.ops.router import OpsRouter, BINDING
 from mcp_uof.ops.base import OpsBackend
 
-# 預期綁定：query_forms→web（UOF PublicAPI 無清單/搜尋 API），其餘 11 個→soap。
+# 預期綁定：query_forms→http_web（UOF PublicAPI 無清單/搜尋 API），其餘 11 個→soap。
 EXPECTED = {
     "check_auth": "soap",
     "get_form_list": "soap",
@@ -31,7 +31,7 @@ EXPECTED = {
     "apply_form": "soap",
     "terminate_task": "soap",
     "sign_next": "soap",
-    "query_forms": "web",
+    "query_forms": "http_web",
 }
 
 
@@ -60,7 +60,7 @@ def main() -> int:
           f"差異={set(BINDING) ^ ops_methods}")
 
     # 4) router 依綁定委派到正確機制（離線，不連線）
-    check("query_forms 委派 WebBackend", type(b._mech("query_forms")).__name__ == "WebBackend")
+    check("query_forms 委派 HttpWebBackend", type(b._mech("query_forms")).__name__ == "HttpWebBackend")
     check("apply_form 委派 SoapBackend", type(b._mech("apply_form")).__name__ == "SoapBackend")
     check("check_auth 委派 SoapBackend", type(b._mech("check_auth")).__name__ == "SoapBackend")
 
