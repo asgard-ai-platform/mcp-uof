@@ -1,64 +1,117 @@
-# mcp-uof
+# MCP UOF
 
-**UOF (U-Office Force) 一代平台的 MCP Server 實作**
+[![PyPI version](https://img.shields.io/pypi/v/mcp-uof.svg)](https://pypi.org/project/mcp-uof/)
+[![Python versions](https://img.shields.io/pypi/pyversions/mcp-uof.svg)](https://pypi.org/project/mcp-uof/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/issues)
+[![GitHub last commit](https://img.shields.io/github/last-commit/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/commits/main)
+[![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io/)
 
-透過 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 將 UOF 的
-SOAP/ASMX WebService 封裝為語意化的 AI 工具，讓 Claude、VS Code 等 MCP 客戶端
-能直接操作電子簽核等企業協作功能。
+[繁體中文](README.zh-TW.md)
 
-## 本版本範圍
+An open-source [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that wraps UOF (U-Office Force) SOAP/ASMX services into AI-callable tools for workflow automation.
 
-本版本提供**電子簽核（WKF）**模組，透過 stdio 連線供 Claude Desktop、VS Code 等 MCP 客戶端使用，
-涵蓋表單查詢、流程預覽、外部起單、進度追蹤、簽核與強制結案。
+Built for Claude Code, Claude Desktop, VS Code, and any MCP-compatible client. It lets AI agents query workflow forms, inspect form schemas, submit forms, track workflow progress, and close workflow tasks through natural language.
 
-### 機制對使用者透明（工具是唯一面向）
+## What This Does
 
-對外只有一組固定工具。每個工具底層用 SOAP/PublicAPI 還是 web（Playwright 驅動網頁）取得資料，是
-**開發期決定、對使用者透明**的實作細節——使用者（與 agent）不選、也看不到機制。原則：SOAP 能做的就
-用 SOAP；SOAP 沒有該能力的才用 web 補——目前是 `query_forms`（列清單/搜尋，PublicAPI 無此 API），
-以及**起單時的特定表單**：採購單本體是客製 plugin、中介欄位填不到內容，故 `apply_form` 對它內部改走
-網頁填單；其餘表單走 SOAP。哪張表單走網頁是設計期靜態登錄（`ops/web_apply/registry.py`），使用者
-只挑表單、呼叫同一個 `apply_form`，**不會遇到「用 web 還是 SOAP 起單」的選擇**。沒有使用者可選的
-「模式」。詳見 [docs/architecture.md](docs/architecture.md)。
+- **12 ready-to-use tools** for UOF workflow operations, including authentication checks, form discovery, schema lookup, workflow preview, form submission, task status, task result, and task closure.
+- **MCP server** over stdio for local AI clients, plus an optional SSE server for HTTP integrations.
+- **Tool-first interface**: users call the same tools regardless of whether the implementation uses SOAP/PublicAPI or browser automation internally.
+- **Single identity model**: one server process represents one UOF account configured through environment variables.
+- **SOAP and web support**: SOAP is used where PublicAPI supports the operation; Playwright-backed web automation fills gaps such as form listing and selected custom form submission flows.
 
-> 註：`query_forms` 內部走網頁取得清單，需先執行一次 `uv run playwright install chromium`。
+## API Reference
 
-其他特點：
+This project targets UOF first-generation SOAP/ASMX services and selected web flows.
 
-- **單一身份模型**：一個 Server 程序代表一位 UOF 使用者，身份在設定時綁定（見[身份模型](#身份模型)）。
-- **認證跟著工具的機制走**：SOAP 工具用 RSA Token（含失效自動刷新）、`query_forms` 用 web cookie session，彼此獨立、由用到的機制惰性取得；`query_forms` 因此**不需 SOAP token**（無 PublicAPI 站台也能用）。登入失敗回固定的設定檢查提示。
+- Authentication: UOF account/password encrypted with the configured RSA public key for SOAP token access; web flows reuse a browser session.
+- Base URL: configured with `UOF_BASE_URL`, for example `https://your-uof-domain.com/VirtualPath`.
+- Required UOF settings: see [docs/configuration.md](docs/configuration.md).
 
-### 起單能力範圍
+## Quick Start
 
-起單分兩條內部路線，依表單自動分派（對使用者透明，都經同一個 `apply_form`）：
-
-- **SOAP 中介起單**（原生設計的表單）：單站自由流程（指定一位第一站簽核者）＋基本欄位型別（文字、
-  自動編號、可空欄位、日期、單選、不帶檔案的附檔欄位）＋**明細（DataGrid，以列清單帶入）**。
-  尚未支援：實際附檔上傳、多站流程與並簽/會簽、固定流程逐站推進。
-- **網頁起單**（本體是客製 plugin、中介欄位填不到內容的表單，如採購單）：以 Playwright 驅動網頁
-  完整填單送出（主旨/供應商/明細等）；較慢、較依賴頁面結構，簽核者由表單自身流程決定。
-
-> 重要：可填的欄位僅限該表單**對外開放的中介欄位**（即 `get_form_structure_by_id` 回傳的欄位），
-> 這可能少於 UOF 網頁上看到的完整表單。若網頁欄位未在後台對應為中介欄位，API 便無法填，
-> 且起單時不會驗證網頁必填欄位——可能起單成功但內容不完整。需要完整填寫請於 UOF 網頁操作。
-
-UOF 的起單 API 本身是通用的（單一 `SendForm` 端點），因此本服務以單一通用起單工具設計，
-擴展方向是支援更多欄位型別與流程型態，而不是為每種表單新增工具。
-
-## 快速開始
+### Install
 
 ```bash
-uv sync
-cp .env.example .env   # 填入 UOF_BASE_URL、UOF_APP_NAME、UOF_RSA_PUBLIC_KEY、UOF_ACCOUNT、UOF_PASSWORD
-
-uv run mcp-uof         # 以 stdio 啟動 MCP Server
+pip install mcp-uof
 ```
 
-設定細節（含 RSA 金鑰產生流程）見 [docs/configuration.md](docs/configuration.md)。
+Or use uvx:
 
-### MCP Client 設定（Claude Desktop / VS Code）
+```bash
+uvx --from mcp-uof mcp-uof
+```
 
-完整綁定與身份切換教學見 **[docs/integration.md](docs/integration.md)**。最小範例：
+For local development from source:
+
+```bash
+git clone https://github.com/asgard-ai-platform/mcp-uof.git
+cd mcp-uof
+uv sync
+cp .env.example .env
+uv run playwright install chromium
+```
+
+Set the required environment variables:
+
+```bash
+export UOF_BASE_URL=https://your-uof-domain.com/VirtualPath
+export UOF_APP_NAME=your_app_name
+export UOF_RSA_PUBLIC_KEY=your_rsa_public_key_base64
+export UOF_ACCOUNT=your_account
+export UOF_PASSWORD=your_password
+```
+
+### Use with Claude Code
+
+Add the server via the Claude CLI:
+
+```bash
+claude mcp add --transport stdio uof -- mcp-uof
+```
+
+Or with environment variables inline:
+
+```bash
+claude mcp add --transport stdio uof \
+  -e UOF_BASE_URL=https://your-uof-domain.com/VirtualPath \
+  -e UOF_APP_NAME=your_app_name \
+  -e UOF_RSA_PUBLIC_KEY=your_rsa_public_key_base64 \
+  -e UOF_ACCOUNT=your_account \
+  -e UOF_PASSWORD=your_password \
+  -- mcp-uof
+```
+
+If you clone the repo locally, run it through `uv`:
+
+```bash
+claude mcp add --transport stdio uof -- uv --directory /absolute/path/to/mcp-uof run mcp-uof
+```
+
+### Use with Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "uof": {
+      "command": "mcp-uof",
+      "env": {
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
+        "UOF_APP_NAME": "your_app_name",
+        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
+        "UOF_ACCOUNT": "your_account",
+        "UOF_PASSWORD": "your_password"
+      }
+    }
+  }
+}
+```
+
+Or with a local checkout:
 
 ```json
 {
@@ -78,58 +131,57 @@ uv run mcp-uof         # 以 stdio 啟動 MCP Server
 }
 ```
 
-範例檔見 [examples/](examples/)。
+See [docs/integration.md](docs/integration.md) and [examples/](examples/) for more client configuration examples.
 
-### 身份模型
+## Tools (12)
 
-UOF 一代採單一系統身份（RSA 帳密），沒有代表個別使用者的 OAuth。因此 `env` 區塊中的
-`UOF_ACCOUNT` 就是這份設定的操作身份——這個 Server 的所有工具呼叫都以該帳號送出。
-要以另一個人的身份操作，請新增一份帶不同帳號的 server entry；切換身份就是切換設定。
-完整說明見 [docs/integration.md](docs/integration.md)。
-
-## MCP Tools 總覽（12 個）
-
-所有 Tool 名稱使用 `uof_custom_` 前綴。
+All tool names use the `uof_custom_` prefix.
 
 | Domain | Tools |
-|---|---|
+|--------|-------|
 | System | `check_auth` |
-| WKF 電子簽核 | `get_form_list`, `get_external_form_list`, `query_forms`, `get_form_structure`, `get_form_structure_by_id`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `terminate_task`, `sign_next` |
+| WKF Workflow | `get_form_list`, `get_external_form_list`, `query_forms`, `get_form_structure`, `get_form_structure_by_id`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `terminate_task`, `sign_next` |
 
-**完整工具規格、人員角色模型、使用情境與能力邊界，請見
-[docs/tools.md](docs/tools.md)（導入前必讀）。**
+Important behavior and constraints:
 
-幾個關鍵邊界先說在前面：
+- UOF first-generation PublicAPI does not provide an inbox or pending-task list API. Users must provide a TaskId from the UOF UI or notification email.
+- UOF does not provide a general per-step approval API. Single-step free-flow approvals can be represented through `terminate_task` with `Adopt` or `Reject` when used by the current signer.
+- `terminate_task` can overwrite already-closed results at the API layer; this server checks task status first and blocks repeated closure.
+- Some form submissions use web automation when SOAP intermediary fields cannot represent the full form body.
 
-- UOF 一代**沒有待簽核清單 API**——TaskId 必須由使用者提供（UI 或通知信）
-- API **沒有逐站簽核動作**；但**單站流程**中待簽主管可用 `terminate_task`（Adopt/Reject）
-  達成簽核語意，歷程記錄與 UI 簽核等價
-- `terminate_task` 在 API 端**無權限管控**且會覆寫已結案結果——工具層已加攔截，使用仍須節制
+See [docs/tools.md](docs/tools.md) for full tool specs, role model, examples, and operational boundaries.
 
-## 測試
+## Project Structure
 
-三層測試法（smoke / e2e / mounted），統一入口：
-
-```bash
-uv run python tests/run.py smoke     # 離線：import 探索、工具→機制綁定（CI 可跑）
-uv run python tests/run.py e2e       # 真實測試環境：服務層採購單劇本（需 .env）
-uv run python tests/run.py mounted   # 真實掛載 MCP：真 stdio 子程序、多身份（需 .env）
-uv run python tests/run.py all       # 三層依序（缺 .env 時真實層自動 skip）
+```text
+mcp-uof/
+├── src/mcp_uof/                 # MCP server, auth, routing, SOAP/web backends
+├── docs/                        # Architecture, configuration, integration, tools, testing
+├── examples/                    # Claude Desktop and VS Code MCP config examples
+├── scripts/                     # RSA key and WSDL helper scripts
+├── tests/                       # smoke / e2e / mounted test layers
+├── .env.example                 # Environment variable template
+├── README.zh-TW.md              # Traditional Chinese README
+└── pyproject.toml
 ```
 
-各層定義與測試紀律見 [docs/testing.md](docs/testing.md)。
+## Development
 
-## 文件
+```bash
+uv sync
+uv run python tests/run.py smoke
+uv run python -m compileall src tests
+```
 
-- [安裝與綁定教學](docs/integration.md) — Claude Desktop / VS Code Chat 手動綁定、身份切換
-- [實際操作對話](docs/example-session.md) — 一段真實的工具呼叫與回應紀錄
-- [表單需具備的系統設定](docs/form-requirements.md) — 表單要能被 MCP 完整操作的後台前提
-- [設定](docs/configuration.md) — 環境變數、RSA 金鑰流程
-- [架構](docs/architecture.md) — Domain 分層、SOAP client、身份模型
-- [實作設計](docs/design.md) — 每個工具背後怎麼做、兩條認證、新增工具步驟（持續更新）
-- [工具參考](docs/tools.md) — 12 個工具規格、使用情境、能力邊界
-- [測試](docs/testing.md) — 三層測試法與測試紀律
+Tests that connect to a real UOF test environment require `.env`:
 
-## 授權
+```bash
+uv run python tests/run.py e2e
+uv run python tests/run.py mounted
+```
 
-MIT License
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/testing.md](docs/testing.md) for development and testing guidelines.
+
+## License
+
+MIT

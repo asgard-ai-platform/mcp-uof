@@ -1,23 +1,24 @@
 [project]
 name = "mcp-uof"
 version = "0.1.0"
-description = "Custom MCP server for UOF (U-Office Force) WebService SOAP API"
+description = "MCP server wrapping UOF SOAP/ASMX services into AI Agent-callable workflow tools"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
-    { name = "mcp-uof contributors" },
+    { name = "Asgard AI Platform" },
 ]
+keywords = ["mcp", "uof", "workflow", "soap", "ai-agent", "claude"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Office/Business",
+    "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
     "mcp[cli]>=1.0.0",
