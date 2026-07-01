@@ -917,12 +917,16 @@ dependencies = [
     { name = "httpx" },
     { name = "lxml" },
     { name = "mcp", extra = ["cli"] },
-    { name = "playwright" },
     { name = "pycryptodome" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "sse-starlette" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+browser = [
+    { name = "playwright" },
 ]
 
 [package.metadata]
@@ -932,13 +936,14 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "lxml", specifier = ">=5.0.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0.0" },
-    { name = "playwright", specifier = ">=1.40.0" },
+    { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.40.0" },
     { name = "pycryptodome", specifier = ">=3.20.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "sse-starlette", specifier = ">=3.4.4" },
     { name = "uvicorn", specifier = ">=0.48.0" },
 ]
+provides-extras = ["browser"]
 
 [[package]]
 name = "mdurl"
