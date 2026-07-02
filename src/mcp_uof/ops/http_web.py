@@ -799,6 +799,41 @@ class HttpSession:
             "errors": errors,
         }
 
+    # ── search_users ──────────────────────────────────────────────────
+
+    def search_users(self, keyword: str) -> list:
+        """Search UOF users by name or account keyword via ChoiceHandler.ashx.
+
+        Returns list of {UserGuid, Name, display_name, account}.
+        Name field format from server: "顯示名稱(帳號)".
+        """
+        import json as _json
+        resp = self.post("/Common/ChoiceCenter/ChoiceHandler.ashx", {
+            "action": "SearchUser",
+            "userType": "Employee",
+            "keyword": keyword,
+            "userGuid": "",
+            "onlyAvailable": "1",
+            "displayAllDept": "1",
+        })
+        try:
+            raw = _json.loads(resp.text)
+        except Exception:
+            return []
+        results = []
+        for item in raw:
+            name_full = item.get("Name") or ""
+            m = re.match(r"^(.*?)\(([^)]+)\)$", name_full)
+            display_name = m.group(1).strip() if m else name_full
+            account = m.group(2) if m else ""
+            results.append({
+                "UserGuid": item.get("UserGuid") or "",
+                "Name": name_full,
+                "display_name": display_name,
+                "account": account,
+            })
+        return results
+
 
 # ── Singleton ─────────────────────────────────────────────────────────
 
@@ -1057,4 +1092,22 @@ class HttpWebBackend(OpsBackend):
         lines.append(
             "\n💡 把 TaskId 帶入 `get_task_data` / `get_task_result` 可查單張詳情。"
         )
+        return "\n".join(lines)
+
+    def search_users(self, keyword: str) -> str:
+        if not keyword or not keyword.strip():
+            return "❌ 請提供查詢關鍵字（姓名或帳號）。"
+        try:
+            users = self._session.search_users(keyword.strip())
+        except Exception as ex:
+            return f"❌ 查詢人員時發生錯誤 ({type(ex).__name__}): {ex}"
+        if not users:
+            return f"📋 找不到符合「{keyword}」的人員。"
+        lines = [f"👥 人員查詢結果（關鍵字：「{keyword}」，共 {len(users)} 筆）："]
+        for u in users:
+            lines.append(
+                f"\n  姓名：{u['display_name']}　帳號：{u['account']}"
+                f"\n  UserGuid：{u['UserGuid']}"
+            )
+        lines.append("\n💡 帳號可用於 apply_form 的 first_signer_account 參數。")
         return "\n".join(lines)

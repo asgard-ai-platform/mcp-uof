@@ -31,6 +31,7 @@ BINDING = {
     "terminate_task": "soap",
     "sign_next": "soap",
     "query_forms": "http_web",  # UOF PublicAPI 無清單/搜尋 API → httpx+lxml 網頁爬取
+    "search_users": "http_web",  # ChoiceCenter 人員查詢 → httpx
 }
 
 
@@ -152,3 +153,6 @@ class OpsRouter(OpsBackend):
         self, keyword: str = "", date_from: str = "", date_to: str = "", max_results: int = 50
     ) -> str:
         return self._route("query_forms", keyword, date_from, date_to, max_results)
+
+    def search_users(self, keyword: str) -> str:
+        return self._route("search_users", keyword)

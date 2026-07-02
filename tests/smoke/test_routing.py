@@ -32,6 +32,7 @@ EXPECTED = {
     "terminate_task": "soap",
     "sign_next": "soap",
     "query_forms": "http_web",
+    "search_users": "http_web",
 }
 
 
@@ -56,11 +57,12 @@ def main() -> int:
     # 3) 綁定鍵 = OpsBackend 全部對外操作（防漏綁/改名/多綁）
     ops_methods = {n for n, v in vars(OpsBackend).items()
                    if getattr(v, "__isabstractmethod__", False)}
-    check("BINDING 鍵集 = OpsBackend 抽象方法集（12）", set(BINDING) == ops_methods,
+    check("BINDING 鍵集 = OpsBackend 抽象方法集（13）", set(BINDING) == ops_methods,
           f"差異={set(BINDING) ^ ops_methods}")
 
     # 4) router 依綁定委派到正確機制（離線，不連線）
     check("query_forms 委派 HttpWebBackend", type(b._mech("query_forms")).__name__ == "HttpWebBackend")
+    check("search_users 委派 HttpWebBackend", type(b._mech("search_users")).__name__ == "HttpWebBackend")
     check("apply_form 委派 SoapBackend", type(b._mech("apply_form")).__name__ == "SoapBackend")
     check("check_auth 委派 SoapBackend", type(b._mech("check_auth")).__name__ == "SoapBackend")
 

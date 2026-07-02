@@ -129,6 +129,7 @@ class SoapBackend(OpsBackend):
         date_to: str = "",
         max_results: int = 50,
     ) -> str:
-        # 不會被呼叫：query_forms 在 ops.router 綁定到 web 機制（UOF 一代 PublicAPI 無清單/搜尋 API）。
-        # 保留以滿足 OpsBackend 介面；若被誤路由到此，回內部錯誤而非把實作細節丟給使用者。
         return "⚠️ 內部路由錯誤：query_forms 不應由 SOAP 機制處理。"
+
+    def search_users(self, keyword: str) -> str:
+        return "⚠️ 內部路由錯誤：search_users 不應由 SOAP 機制處理。"

@@ -61,7 +61,7 @@ class OpsBackend(ABC):
         self, task_id: str, site_id: str, node_seq: int, signer_guid: str
     ) -> str: ...
 
-    # ── WKF search — UOF PublicAPI 無清單/搜尋 API，於 ops.router 綁定到 web 機制 ──
+    # ── WKF search — UOF PublicAPI 無清單/搜尋 API，於 ops.router 綁定到 http_web 機制 ──
     @abstractmethod
     def query_forms(
         self,
@@ -70,6 +70,8 @@ class OpsBackend(ABC):
         date_to: str = "",
         max_results: int = 50,
     ) -> str: ...
+    @abstractmethod
+    def search_users(self, keyword: str) -> str: ...
 
 
 def web_not_implemented(method: str, hint: str = "") -> str:

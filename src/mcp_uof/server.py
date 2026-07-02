@@ -246,6 +246,23 @@ def uof_custom_query_forms(
 
 @mcp.tool()
 @require_auth
+def uof_custom_search_users(
+    keyword: Annotated[
+        str,
+        Field(description="查詢關鍵字：輸入姓名或帳號的一部分即可，例如「asgard」「王小明」"),
+    ],
+) -> str:
+    """依姓名或帳號關鍵字查詢 UOF 人員，回傳姓名、帳號與 UserGuid。
+
+    何時使用：需要指定 apply_form 的 first_signer_account（第一簽核者帳號）時，
+    先用本工具確認對方在 UOF 的正確帳號，避免帳號輸錯導致起單失敗。
+
+    限制：回傳範圍為目前帳號可看到的 UOF 人員（同 ChoiceCenter 選人清單）。"""
+    return get_backend().search_users(keyword)
+
+
+@mcp.tool()
+@require_auth
 def uof_custom_sign_next(
     task_id: Annotated[str, Field(description="表單工作代號 TaskId")],
     site_id: Annotated[str, Field(description="目前站點代號（僅固定流程的後台設計才有）")],

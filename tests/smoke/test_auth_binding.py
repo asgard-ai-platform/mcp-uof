@@ -56,6 +56,7 @@ def main() -> int:
 
     # 1) 綁定表（供認證閘判斷）
     check("mechanisms_for(query_forms) = ['http_web']", mechanisms_for("query_forms") == ["http_web"])
+    check("mechanisms_for(search_users) = ['http_web']", mechanisms_for("search_users") == ["http_web"])
     check("mechanisms_for(apply_form) = ['soap']", mechanisms_for("apply_form") == ["soap"])
     check("mechanisms_for(get_form_list) = ['soap']", mechanisms_for("get_form_list") == ["soap"])
 
@@ -71,6 +72,7 @@ def main() -> int:
     ab.get_session_provider = lambda: OK("session")
     for name, expect in [
         ("uof_custom_query_forms", "session"),
+        ("uof_custom_search_users", "session"),
         ("uof_custom_get_form_list", "token"),
         ("uof_custom_apply_form", "token"),
         ("uof_custom_terminate_task", "token"),
