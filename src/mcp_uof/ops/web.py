@@ -51,7 +51,8 @@ APPLY_FORM_LIST_PATH = "/WKF/FormUse/PersonalBox/ApplyFormList.aspx"
 ADD_FORM_SCRIPT_PATH = "/WKF/FormUse/AddFormScript.aspx"
 
 if TYPE_CHECKING:
-    from playwright.sync_api import BrowserContext, Page
+    BrowserContext = object  # playwright optional — not imported at runtime
+    Page = object
 
 
 # ── Singleton Playwright runtime ──────────────────────────────────────
@@ -83,13 +84,16 @@ class WebRuntime:
         if self._initialized:
             return
         try:
+            import playwright as _pw_pkg  # noqa: F401 — presence check only
             from playwright.sync_api import sync_playwright
         except ImportError as e:
             raise RuntimeError(
-                "Playwright is required for the web mechanism (e.g. query_forms). "
-                "Install: `uv add playwright` then `uv run playwright install chromium`. "
+                "Playwright is not installed. This is a legacy code path; "
+                "all active tools now use the httpx backend (ops/http_web.py). "
+                "If you intentionally need this Playwright path, install: "
+                "`uv add 'mcp-uof[browser]'` then `uv run playwright install chromium`. "
                 f"Original error: {e}"
-            )
+            ) from e
         self._pw = sync_playwright().start()
         try:
             self._browser = self._pw.chromium.launch(headless=True)

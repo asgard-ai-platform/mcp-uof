@@ -3,12 +3,12 @@ OpsRouter — 對外唯一的操作面；每個工具於「開發期」靜態綁
 
 使用者（與 agent）只面對「有哪些工具」，看不到、也不需要選擇機制。綁定原則由開發者在實作時決定：
 能用 SOAP / PublicAPI 做的就用 SOAP；SOAP 沒有該能力的（目前只有清單/搜尋類 `query_forms`，
-因為 UOF 一代 PublicAPI 沒有列出/搜尋表單的 API）才改用 web（Playwright 驅動網頁）。
+因為 UOF 一代 PublicAPI 沒有列出/搜尋表單的 API）才改用 http_web（httpx+lxml 網頁爬取）。
 
 下方 `BINDING` 就是「用哪種方式取得資料」的**唯一決策點**，對使用者完全透明——不會有任何
 「請切換模式」這種把實作細節丟回給使用者的行為。要新增或改綁一個工具的機制，只改這張表。
 
-機制實作（SoapBackend / WebBackend）惰性建立並快取；各自取得所需認證（SOAP→token、web→session），
+機制實作（SoapBackend / HttpWebBackend）惰性建立並快取；各自取得所需認證（SOAP→token、http_web→session），
 共用同一身份（一個程序 = 一個 UOF_ACCOUNT）。
 """
 from __future__ import annotations
@@ -58,7 +58,6 @@ class OpsRouter(OpsBackend):
 
     def __init__(self) -> None:
         self._soap = None
-        self._web = None
         self._http_web = None
 
     # ── 機制（惰性、單例）──────────────────────────────────────────
@@ -70,13 +69,6 @@ class OpsRouter(OpsBackend):
         return self._soap
 
     @property
-    def web(self) -> OpsBackend:
-        if self._web is None:
-            from .web import WebBackend
-            self._web = WebBackend()
-        return self._web
-
-    @property
     def http_web(self) -> OpsBackend:
         if self._http_web is None:
             from .http_web import HttpWebBackend
@@ -85,8 +77,6 @@ class OpsRouter(OpsBackend):
 
     def _mech(self, op: str) -> OpsBackend:
         m = BINDING[op]
-        if m == "web":
-            return self.web
         if m == "http_web":
             return self.http_web
         return self.soap
