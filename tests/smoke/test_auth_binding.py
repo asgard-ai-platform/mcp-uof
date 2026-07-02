@@ -111,11 +111,11 @@ def main() -> int:
     ab.get_session_provider = lambda: OK("session")
 
     # 2e) ApplyFormList 反查不到 version 時必須 fail-loud，不可靜默退 SOAP
-    import mcp_uof.ops.web as web
-    old_get_web_runtime = web.get_web_runtime
-    class EmptyRuntime:
-        def form_id_for_version(self, form_version_id): return ""
-    web.get_web_runtime = lambda: EmptyRuntime()
+    import mcp_uof.ops.http_web as http_web
+    old_get_http_session = http_web.get_http_session
+    class EmptySession:
+        def get_form_id_version_mapping(self): return {}
+    http_web.get_http_session = lambda: EmptySession()
     try:
         try:
             resolve_version("missing-version")
@@ -123,7 +123,7 @@ def main() -> int:
         except VersionResolveError:
             check("version 反查空 formId → fail-loud", True)
     finally:
-        web.get_web_runtime = old_get_web_runtime
+        http_web.get_http_session = old_get_http_session
 
     # 3) query_forms 的 session 失敗 → 回失敗訊息，且**不會**改去驗 token（不被 SOAP 影響）
     ab.get_token_provider = lambda: OK("token")

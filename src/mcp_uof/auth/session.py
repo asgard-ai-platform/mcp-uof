@@ -1,20 +1,13 @@
 """
-SessionAuthProvider — UOF Login.aspx form post + cookie jar.
+SessionAuthProvider — UOF Login.aspx form post + httpx cookie jar.
 
 For UOF deployments without PublicAPI module (the SOAP/ASMX backend is absent), the only
 way to drive operations is to log in as a real user would and reuse the session. This
-provider:
+provider delegates to `ops.http_web.HttpSession`:
 
   1. Performs the ASP.NET WebForms login (handles __VIEWSTATE round-trip)
-  2. Stores the authenticated `.ASPXFORMSAUTH_UOF` cookie via Playwright's storage_state
-     so the cookie jar can be reused by the Web ops backend (which drives Telerik UI)
-     and survives process restarts.
+  2. Stores the authenticated cookie in the httpx.Client jar (in-memory, no Playwright).
   3. Re-logs in transparently when the session expires (typical ASP.NET idle timeout ~20m).
-
-NOTE: The actual browser/Playwright is owned by `ops.web.WebBackend` — this provider only
-*requests* a session refresh and reads identity from the resulting page. We keep the
-Playwright lifecycle in one place to avoid two parallel browsers fighting for the same
-storage_state file.
 """
 from __future__ import annotations
 
@@ -61,7 +54,7 @@ class SessionAuthProvider(AuthProvider):
         )
 
     def credentials_file(self) -> str:
-        """Path to the Playwright storage_state JSON for this identity."""
+        """Path stub for this identity (cookies live in-memory via httpx.Client)."""
         account = os.getenv("UOF_ACCOUNT", "anonymous")
         safe_account = re.sub(r"[^A-Za-z0-9_.-]", "_", account) or "anonymous"
         digest = hashlib.sha256(self._identity_key().encode("utf-8")).hexdigest()[:8]
@@ -76,16 +69,14 @@ class SessionAuthProvider(AuthProvider):
 
     # ── AuthProvider surface ────────────────────────────────────────
     def ensure_valid(self) -> None:
-        """Trigger the web backend to verify or re-establish the browser session."""
+        """Verify or re-establish the httpx session (login if cookie expired)."""
         # Avoid hammering the server: re-validate at most once per 30s.
         if time.time() - self._last_validated < 30 and self._identity_cached == self._identity_key():
             return
         self._validate_env()
-        # Delegate to ops.web.WebBackend, which owns the Playwright runtime.
-        from ..ops.web import get_web_runtime
-        runtime = get_web_runtime()
-        display_name = runtime.ensure_logged_in()
-        self.logged_in_display_name = display_name
+        from ..ops.http_web import get_http_session
+        get_http_session()._ensure_logged_in()
+        self.logged_in_display_name = os.getenv("UOF_ACCOUNT", "")
         self._last_validated = time.time()
         self._identity_cached = self._identity_key()
 
@@ -100,26 +91,13 @@ class SessionAuthProvider(AuthProvider):
         display = self.logged_in_display_name or account
         return (
             f"✅ Session 有效，目前以 **{account}**（{display}）的身份操作"
-            f"（認證：網頁 session）。\n"
+            f"（認證：httpx web session）。\n"
             f"🔗 Base URL: {base_url}\n"
-            f"📂 Storage state: `{self.credentials_file()}`\n"
-            f"⚠️ 網頁機制：操作走 Playwright 驅動 UOF 頁面，並非所有工具皆已實作。"
         )
 
     def clear(self, all_identities: bool = False) -> None:
-        _ensure_dir()
-        if all_identities:
-            for path in CREDENTIALS_DIR.glob("storage_state-*.json"):
-                path.unlink(missing_ok=True)
-                _eprint(f"[auth.session] 🗑️ 已清除 storage state: {path}")
-        else:
-            p = Path(self.credentials_file())
-            if p.exists():
-                p.unlink()
-                _eprint(f"[auth.session] 🗑️ 已清除 storage state: {p}")
-        # Force web runtime to reset on next call
-        from ..ops.web import reset_web_runtime
-        reset_web_runtime()
+        from ..ops.http_web import reset_http_session
+        reset_http_session()
         self._last_validated = 0.0
         self._identity_cached = None
 

@@ -122,7 +122,7 @@ def uof_custom_preview_workflow(
         err = _web_apply_identity_error(applicant_account)
         if err:
             return err
-        return web_apply.apply_web(entry, fields or {}, dry_run=True)
+        return web_apply.apply_web(entry, fields or {}, dry_run=True, form_version_id=form_version_id)
     return get_backend().preview_workflow(
         form_version_id, applicant_account, first_signer_account, fields, comment, urgent_level
     )
@@ -163,7 +163,7 @@ def uof_custom_apply_form(
         err = _web_apply_identity_error(applicant_account)
         if err:
             return err
-        return web_apply.apply_web(entry, fields)
+        return web_apply.apply_web(entry, fields, form_version_id=form_version_id)
     return get_backend().apply_form(
         form_version_id, applicant_account, first_signer_account, fields, comment, urgent_level
     )

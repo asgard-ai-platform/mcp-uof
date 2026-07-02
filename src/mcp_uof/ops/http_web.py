@@ -818,6 +818,13 @@ def get_http_session() -> HttpSession:
     return _session
 
 
+def reset_http_session() -> None:
+    """Discard the singleton so the next caller gets a fresh session."""
+    global _session
+    with _session_lock:
+        _session = None
+
+
 # ── HttpWebBackend ────────────────────────────────────────────────────
 
 class HttpWebBackend(OpsBackend):

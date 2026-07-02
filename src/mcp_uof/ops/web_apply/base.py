@@ -1,8 +1,8 @@
 """WebApplyHandler — 逐單種的網頁起單處理器介面。
 
-對外只有一個共用 MCP 工具；它判斷單種後分派到對應 handler（見 router.py）。每個 handler 負責
-某一種單據的網頁填單＋送出流程。實際 Playwright 步驟由 WebRuntime 的 worker thread 呼叫
-`fill_and_submit(page, ...)` 執行（見 ops/web.py 的 web_apply）。
+對外只有一個共用 MCP 工具；它判斷單種後分派到 apply_web（見 router.py）。
+router.py 透過 httpx（ops.http_web.HttpSession.apply_form_web）提交；
+handler 的 describe() / validate() 在送出前執行，fill_and_submit 已不再使用。
 """
 from __future__ import annotations
 

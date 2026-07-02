@@ -51,14 +51,24 @@ def describe_version(form_version_id: str) -> Optional[str]:
     return entry.handler.describe() if entry else None
 
 
-def apply_web(entry: FormApplyEntry, payload: dict, dry_run: bool = False) -> str:
-    """執行某表單的網頁起單 handler（在 WebRuntime 的 worker thread 內）。"""
+def apply_web(
+    entry: FormApplyEntry,
+    payload: dict,
+    dry_run: bool = False,
+    form_version_id: str = "",
+) -> str:
+    """執行某表單的網頁起單（透過 httpx，無 Playwright）。"""
     err = entry.handler.validate(payload)
     if err:
         return f"❌ 起單參數不足（{entry.form_name}）：{err}"
-    from ..web import get_web_runtime
+    if dry_run:
+        return (
+            f"📝 dry_run — 未送出（{entry.form_name}）。"
+            f"表單欄位說明：\n{entry.handler.describe()}"
+        )
+    from ..http_web import get_http_session
     try:
-        result = get_web_runtime().web_apply(entry.handler, entry.form_name, payload, dry_run)
+        result = get_http_session().apply_form_web(form_version_id, payload)
     except Exception as e:
         return f"❌ 網頁起單執行錯誤（{type(e).__name__}）：{e}"
     return _format(entry, result)
@@ -74,21 +84,15 @@ def resolve_error_message(form_version_id: str, error: Exception) -> str:
 def _format(entry: FormApplyEntry, r: dict) -> str:
     name = entry.form_name
     if not r.get("ok"):
-        return (f"❌ 起單失敗（{name}）：{r.get('reason', '(unknown)')}\n"
-                f"   步驟：{' → '.join(r.get('log', []))}")
-    if r.get("dry_run"):
-        f = r.get("filled", {})
-        return (f"✅ 試填成功（dry_run，未送出）：{name}\n"
-                f"   主旨：{f.get('subject')}｜供應商：{f.get('supplier')} / {f.get('supplier_name')}\n"
-                f"   幣別：{f.get('currency')}｜明細 {len(f.get('details', []))} 筆"
-                f"｜金額合計：{f.get('total') or '(未取得)'}｜明細加入：{'是' if r.get('details_added') else '否'}")
+        return f"❌ 起單失敗（{name}）：{r.get('reason', '(unknown)')}"
     if r.get("submitted_unconfirmed"):
         return (f"⚠️ 起單可能已送出，但 TaskId 未確認：{name}\n"
                 f"   表單編號：{r.get('form_number') or '(未取得)'}\n"
-                f"   主旨：{r.get('filled', {}).get('subject')}\n"
                 f"   說明：{r.get('reason')}\n"
                 "   請先用 query_forms 或 UOF 網頁確認，勿直接重送。")
+    errors = r.get("errors", [])
+    err_note = f"\n   ⚠️ 欄位警告：{'; '.join(errors)}" if errors else ""
     return (f"✅ 起單成功：{name}\n"
             f"   表單編號：{r.get('form_number') or '(未取得)'}\n"
-            f"   TaskId：{r.get('task_id')}\n"
-            f"   主旨：{r.get('filled', {}).get('subject')}")
+            f"   TaskId：{r.get('task_id')}"
+            + err_note)
