@@ -1,14 +1,4 @@
-"""
-SessionAuthProvider — UOF Login.aspx form post + httpx cookie jar.
-
-For UOF deployments without PublicAPI module (the SOAP/ASMX backend is absent), the only
-way to drive operations is to log in as a real user would and reuse the session. This
-provider delegates to `ops.http_web.HttpSession`:
-
-  1. Performs the ASP.NET WebForms login (handles __VIEWSTATE round-trip)
-  2. Stores the authenticated cookie in the httpx.Client jar (in-memory, no Playwright).
-  3. Re-logs in transparently when the session expires (typical ASP.NET idle timeout ~20m).
-"""
+"""Login.aspx authentication backed by an in-memory httpx cookie jar."""
 from __future__ import annotations
 
 import hashlib
@@ -27,7 +17,7 @@ from .._log import eprint as _eprint  # 診斷一律走 stderr（共用，勿在
 
 
 CREDENTIALS_DIR = Path(os.path.expanduser("~")) / ".uof"
-DEFAULT_SESSION_TTL = 20 * 60  # ASP.NET 預設 idle timeout = 20 min
+DEFAULT_SESSION_TTL = 20 * 60
 
 
 def _ensure_dir() -> None:
@@ -58,7 +48,7 @@ class SessionAuthProvider(AuthProvider):
         account = os.getenv("UOF_ACCOUNT", "anonymous")
         safe_account = re.sub(r"[^A-Za-z0-9_.-]", "_", account) or "anonymous"
         digest = hashlib.sha256(self._identity_key().encode("utf-8")).hexdigest()[:8]
-        return str(CREDENTIALS_DIR / f"storage_state-{safe_account}-{digest}.json")
+        return str(CREDENTIALS_DIR / f"identity-{safe_account}-{digest}.json")
 
     def required_env_help(self) -> str:
         return (
@@ -113,9 +103,9 @@ class SessionAuthProvider(AuthProvider):
                 f"目前缺少: {', '.join(missing)}"
             )
 
-    # ── Storage-state metadata sidecar (account, timestamps) ────────
+    # ── Optional identity metadata ──────────────────────────────────
     def write_metadata(self) -> None:
-        """Write a small JSON next to storage_state recording who logged in + when."""
+        """Write optional identity metadata; this does not persist session cookies."""
         _ensure_dir()
         meta_path = self.credentials_file() + ".meta"
         data = {

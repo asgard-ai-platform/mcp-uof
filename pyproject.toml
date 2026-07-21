@@ -1,14 +1,14 @@
 [project]
 name = "mcp-uof"
 version = "0.1.7"
-description = "MCP server wrapping UOF SOAP/ASMX services into AI Agent-callable workflow tools"
+description = "MCP server turning UOF workflow operations into AI Agent-callable tools via httpx web automation"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "Asgard AI Platform" },
 ]
-keywords = ["mcp", "uof", "workflow", "soap", "ai-agent", "claude"]
+keywords = ["mcp", "uof", "workflow", "httpx", "ai-agent", "claude"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -26,15 +26,8 @@ dependencies = [
     "httpx>=0.24.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
-    "fastapi>=0.136.3",
-    "uvicorn>=0.48.0",
-    "sse-starlette>=3.4.4",
-    "pycryptodome>=3.20.0",
     "lxml>=5.0.0",
 ]
-
-[project.optional-dependencies]
-browser = ["playwright>=1.40.0"]
 
 [project.urls]
 Homepage = "https://github.com/asgard-ai-platform/mcp-uof"
@@ -43,7 +36,6 @@ Issues = "https://github.com/asgard-ai-platform/mcp-uof/issues"
 
 [project.scripts]
 mcp-uof = "mcp_uof.server:main"
-mcp-uof-sse = "mcp_uof.sse_server:main"
 
 [build-system]
 requires = ["hatchling"]
