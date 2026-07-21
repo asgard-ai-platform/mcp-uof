@@ -29,13 +29,10 @@ body:
       label: Area
       options:
         - Workflow (WKF) tools
-        - Document management (DMS) tools
-        - EIP tools
-        - UChat tools
         - System tools
-        - Ops routing (SOAP / web)
+        - Ops routing (httpx web)
         - Authentication
-        - SSE transport
+        - stdio transport
         - Documentation
         - Packaging
         - Other

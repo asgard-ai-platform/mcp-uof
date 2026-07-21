@@ -42,13 +42,13 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: mode
+    id: invocation
     attributes:
-      label: Runtime Mode
+      label: Invocation
       options:
-        - stdio
-        - SSE
-        - manual test script
+        - MCP stdio client
+        - smoke test
+        - mounted test
         - other
     validations:
       required: true
@@ -67,7 +67,7 @@ body:
         OS: macOS 15
         Python: 3.12.x
         uv: 0.x.x
-        UOF_VERIFY_SSL: true
+        UOF_SSL_VERIFY: true
     validations:
       required: true
   - type: textarea
