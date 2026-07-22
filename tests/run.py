@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent  # tests/
 PYTHON = sys.executable
 
 TIERS = {
-    "smoke": ["smoke/test_imports.py", "smoke/test_binding.py"],
+    "smoke": ["smoke/test_imports.py", "smoke/test_binding.py", "smoke/test_http_web_regressions.py"],
     "mounted": ["mounted/test_mcp_stdio.py"],
 }
 ORDER = ["smoke", "mounted"]

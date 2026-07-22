@@ -14,6 +14,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import date, timedelta
 from typing import Optional
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -28,6 +29,7 @@ _HOMEPAGE_PATH = "/Homepage.aspx"
 _FORM_QUERY_PATH = "/WKF/FormUse/PersonalBox/MyFormList.aspx?item=FormQuery"
 _APPLY_FORM_LIST_PATH = "/WKF/FormUse/PersonalBox/ApplyFormList.aspx"
 _ADD_FORM_SCRIPT_PATH = "/WKF/FormUse/AddFormScript.aspx"
+_FORM_CACHE_TTL_SECONDS = 300.0
 
 # ASP.NET hidden inputs to ALWAYS carry but never treat as field values.
 _ASPNET_HIDDEN = frozenset([
@@ -132,6 +134,17 @@ def _parse_apply_form_tree(html_text: str) -> list:
                 "category": cur_cat,
             })
     return forms
+
+
+def _mark_filled(filled: dict, caller_key: str, fb: dict, value: str) -> None:
+    """Record a successful fill under every key validation may use."""
+    filled[caller_key] = value
+    code = fb.get("code") or ""
+    label = fb.get("label") or ""
+    if code:
+        filled[code] = value
+    if label:
+        filled[label] = value
 
 
 def _parse_hidden_fields(tree) -> dict:
@@ -1059,6 +1072,8 @@ class HttpSession:
         )
         self._form_id_version_map: Optional[dict] = None
         self._apply_form_list: Optional[dict] = None
+        self._form_cache_at = 0.0
+        self._login_lock = threading.Lock()
 
     # ── Internal helpers ─────────────────────────────────────────────
 
@@ -1090,6 +1105,9 @@ class HttpSession:
     def _is_login_page(self, resp: "_httpx.Response") -> bool:
         return "Login.aspx" in str(resp.url)
 
+    def _form_cache_valid(self) -> bool:
+        return (time.monotonic() - self._form_cache_at) < _FORM_CACHE_TTL_SECONDS
+
     def _do_login(self) -> None:
         """GET Login.aspx, parse VIEWSTATE, POST credentials."""
         account = os.environ.get("UOF_ACCOUNT", "")
@@ -1115,23 +1133,32 @@ class HttpSession:
             )
         _eprint("[ops.http_web] login succeeded")
 
+    def _relogin_if_still_expired(self) -> None:
+        """Avoid duplicate concurrent logins: re-check session after taking the lock."""
+        with self._login_lock:
+            probe = self._client.get(self._full_url(self._vpath + _HOMEPAGE_PATH))
+            if self._is_login_page(probe):
+                self._do_login()
+
     def get(self, path: str) -> "_httpx.Response":
         """GET path (relative to base+vpath), auto-relogin on Login.aspx redirect."""
         url = self._full_url(self._vpath + path)
         resp = self._client.get(url)
         if self._is_login_page(resp):
             _eprint(f"[ops.http_web] 🔄 session expired, re-logging in")
-            self._do_login()
+            self._relogin_if_still_expired()
             resp = self._client.get(url)
         return resp
 
-    def post(self, path: str, data: dict) -> "_httpx.Response":
+    def post(self, path: str, data: dict, *, retry_on_login: bool = True) -> "_httpx.Response":
         """POST to path (relative to base+vpath), auto-relogin on Login.aspx redirect."""
         url = self._full_url(self._vpath + path)
         resp = self._client.post(url, data=data)
         if self._is_login_page(resp):
+            if not retry_on_login:
+                return resp
             _eprint(f"[ops.http_web] 🔄 session expired on POST, re-logging in")
-            self._do_login()
+            self._relogin_if_still_expired()
             resp = self._client.post(url, data=data)
         return resp
 
@@ -1140,7 +1167,7 @@ class HttpSession:
         url = self._full_url(self._vpath + _HOMEPAGE_PATH)
         resp = self._client.get(url)
         if self._is_login_page(resp):
-            self._do_login()
+            self._relogin_if_still_expired()
 
     # ── formId ↔ formVersionId mapping ──────────────────────────────
 
@@ -1152,7 +1179,7 @@ class HttpSession:
         FormQuery *query* dropdown, which is a broader, version-less set and must not be used
         for the applyable list.)
         """
-        if self._apply_form_list is not None:
+        if self._apply_form_list is not None and self._form_cache_valid():
             return self._apply_form_list
         resp = self.get(_APPLY_FORM_LIST_PATH)
         if "Login.aspx" in str(resp.url):
@@ -1160,12 +1187,13 @@ class HttpSession:
         forms = _parse_apply_form_tree(resp.text)
         result = {"ok": True, "reason": "", "forms": forms}
         self._apply_form_list = result
+        self._form_cache_at = time.monotonic()
         _eprint(f"[ops.http_web] ApplyFormList: {len(forms)} applyable forms")
         return result
 
     def get_form_id_version_mapping(self) -> dict:
         """{formId: versionId} (lowercase) for the applyable forms in the ApplyFormList tree."""
-        if self._form_id_version_map is not None:
+        if self._form_id_version_map is not None and self._form_cache_valid():
             return self._form_id_version_map
         mapping: dict = {}
         for f in self.scrape_apply_form_list().get("forms", []):
@@ -1215,8 +1243,8 @@ class HttpSession:
             for rr in self.search_forms(max_results=50).get("rows", []):
                 if rr.get("form_number") == form_number:
                     return rr.get("task_id", ""), rr.get("form_name", "")
-        except Exception:
-            pass
+        except Exception as ex:
+            _eprint(f"[ops.http_web] ⚠️ lookup created form failed: {type(ex).__name__}: {ex}")
         return "", ""
 
     # ── Form structure ───────────────────────────────────────────────
@@ -1482,7 +1510,6 @@ class HttpSession:
         if not st["fields"]:
             return {"ok": False, "reason": f"找不到對話框欄位 {field_code}", "field": "", "rows": []}
         f = st["fields"][0]
-        url = f.get("dialog") and f.get("code")
         # dialog_structure only keeps the basename; re-resolve the full url here
         fid, vid = self._resolve_form_ids(form_version_id)
         resp = self.get(f"{_ADD_FORM_SCRIPT_PATH}?formId={fid}&formVersionId={vid}&mode=apply")
@@ -1582,7 +1609,7 @@ class HttpSession:
                 lp["DialogReturnValue"] = (picked if isinstance(picked, str)
                                            else _json.dumps(picked, ensure_ascii=False))
                 _trigger(lp, tree, press)
-                rl = self.post(path, lp)
+                rl = self.post(path, lp, retry_on_login=False)
                 tree = self._parse(rl)
             payload = _form_state_payload(tree)
             unknown = [k for k in fields if k not in short and k not in controls]
@@ -1609,13 +1636,16 @@ class HttpSession:
             for press in (row.get("_press_after") or []):
                 cp = dict(payload)
                 _trigger(cp, tree, press)
-                rc = self.post(path, cp)
+                rc = self.post(path, cp, retry_on_login=False)
                 tree = self._parse(rc)
                 payload = _form_state_payload(tree)
             payload["__EVENTTARGET"] = "ctl00$MasterPageRadButton1"
             payload["__EVENTARGUMENT"] = ""
             payload["FASTReturnValue"] = "[DefaultNullValue]"
-            resp = self.post(path, payload)
+            resp = self.post(path, payload, retry_on_login=False)
+            if "Login.aspx" in str(resp.url):
+                errors.append(f"第 {ri + 1} 列：session 已過期，未重送列確認，請重試")
+                continue
             if "ErrorReport" in str(resp.url):
                 errors.append(f"第 {ri + 1} 列：確定時被導向 ErrorReport（可能必填未齊或值不合法）")
                 continue
@@ -1847,7 +1877,10 @@ class HttpSession:
             payload["FASTReturnValue"] = "[DefaultNullValue]"
             payload["__EVENTTARGET"] = "ctl00$MasterPageRadButton1"
             payload["__EVENTARGUMENT"] = ""
-            rr = self.post(path, payload)
+            rr = self.post(path, payload, retry_on_login=False)
+            if "Login.aspx" in str(rr.url):
+                errors.append(f"第 {ri + 1} 列：session 已過期，未重送列確認，請重試")
+                continue
             if "ErrorReport" in str(rr.url):
                 errors.append(f"第 {ri + 1} 列：對話框確定後被導向 ErrorReport")
                 continue
@@ -1977,7 +2010,7 @@ class HttpSession:
                 payload[iname + "$dateInput"] = v_slash
                 cs = iname.replace("$", "_") + "_dateInput_ClientState"
                 payload[cs] = _raddate_clientstate(payload.get(cs, ""), v_slash)
-                filled[code] = v_slash
+                _mark_filled(filled, code, fb, v_slash)
 
             elif itype == "dropDown":
                 # Find matching option in tree
@@ -1991,7 +2024,7 @@ class HttpSession:
                         opt_txt = "".join(opt.itertext()).strip()
                         if opt_val == str_val or opt_txt == str_val:
                             payload[iname] = opt_val
-                            filled[code] = opt_val
+                            _mark_filled(filled, code, fb, opt_val)
                             matched = True
                             break
                     if not matched:
@@ -2001,7 +2034,7 @@ class HttpSession:
                             opt_txt = "".join(opt.itertext()).strip()
                             if str_val.lower() in opt_txt.lower():
                                 payload[iname] = opt_val
-                                filled[code] = opt_val
+                                _mark_filled(filled, code, fb, opt_val)
                                 matched = True
                                 break
                 if not matched:
@@ -2025,7 +2058,7 @@ class HttpSession:
                     )
                 else:
                     payload[iname] = hit["value"] if hit else str(value)
-                    filled[code] = payload[iname]
+                    _mark_filled(filled, code, fb, payload[iname])
 
             elif itype == "checkbox":
                 # An ASP.NET CheckBox posts its name only when ticked; the value is irrelevant.
@@ -2038,7 +2071,7 @@ class HttpSession:
                     payload[iname] = (opts[0]["value"] if opts else "on")
                 else:
                     payload.pop(iname, None)
-                filled[code] = "已勾選" if on else "未勾選"
+                _mark_filled(filled, code, fb, "已勾選" if on else "未勾選")
 
             elif itype == "dialog" or isinstance(value, (dict, list, tuple)):
                 # A structured value addresses a plugin block even when the block was inferred as
@@ -2084,7 +2117,12 @@ class HttpSession:
                                                    else json.dumps(picked, ensure_ascii=False))
                         _trigger_control(pp, tree2, press)
                         before = {k: v for k, v in payload.items() if not ucp or ucp in k}
-                        tree2 = self._parse(self.post(first_site_path, pp))
+                        lookup_resp = self.post(first_site_path, pp, retry_on_login=False)
+                        if "Login.aspx" in str(lookup_resp.url):
+                            blocking.append(f"欄位「{label_}」lookup 時 session 已過期，請重試")
+                            bad_inline = True
+                            break
+                        tree2 = self._parse(lookup_resp)
                         # Take the whole rendered state back, not just the hiddens: the columns
                         # the server just filled are ordinary inputs, and keeping the pre-lookup
                         # payload would post the empty values straight back over them at 儲存.
@@ -2114,11 +2152,16 @@ class HttpSession:
                         for press in presses:
                             pp = dict(payload)
                             _trigger_control(pp, tree2, press)
-                            tree2 = self._parse(self.post(first_site_path, pp))
+                            press_resp = self.post(first_site_path, pp, retry_on_login=False)
+                            if "Login.aspx" in str(press_resp.url):
+                                blocking.append(f"欄位「{label_}」按下 {press} 時 session 已過期，請重試")
+                                bad_inline = True
+                                break
+                            tree2 = self._parse(press_resp)
                             payload.update(_form_state_payload(tree2))
                     if bad_inline:
                         continue
-                    filled[code] = "、".join(f"{k}={v}" for k, v in inline.items()) or "已選取"
+                    _mark_filled(filled, code, fb, "、".join(f"{k}={v}" for k, v in inline.items()) or "已選取")
                     if rows_v is None:
                         continue
                     value = rows_v
@@ -2180,7 +2223,11 @@ class HttpSession:
                             pp["DialogReturnValue"] = row_json
                             pp["__EVENTTARGET"] = opener
                             pp["__EVENTARGUMENT"] = ""
-                            rp = self.post(first_site_path, pp)
+                            rp = self.post(first_site_path, pp, retry_on_login=False)
+                            if "Login.aspx" in str(rp.url):
+                                blocking.append("session 已過期，未重送明細回填 postback，請重試")
+                                bad_batch = True
+                                break
                             tree2 = self._parse(rp)
                             payload.update(_parse_hidden_fields(tree2))
                         added_desc.append(f"{res['added']} 列")
@@ -2195,7 +2242,7 @@ class HttpSession:
                         blocking.append(
                             f"明細「{fb.get('label') or code}」回填後表格仍為空——列未真正寫入單據")
                         continue
-                    filled[code] = "＋".join(added_desc)
+                    _mark_filled(filled, code, fb, "＋".join(added_desc))
                     continue
                 if not dialog_url:
                     blocking.append(f"欄位「{fb.get('label') or code}」是查詢視窗型但取不到視窗位址，"
@@ -2217,12 +2264,12 @@ class HttpSession:
                 # Also fill the trigger button field value if possible
                 if iname:
                     payload[iname] = display_val
-                filled[code] = display_val
+                _mark_filled(filled, code, fb, display_val)
 
             else:
                 # text, textarea, numeric, unknown
                 payload[iname] = str(value)
-                filled[code] = str(value)
+                _mark_filled(filled, code, fb, str(value))
                 if itype == "numeric":
                     # a Telerik numeric keeps its real value in `_ClientState`; writing only the
                     # visible input is the bug that made 數量 come back as 0 in the row editors.
@@ -2244,7 +2291,7 @@ class HttpSession:
                 continue
             res = self.add_datagrid_rows(dlg_path, rows)
             if res.get("added"):
-                filled[code] = f"{res['added']} 列"
+                _mark_filled(filled, code, fb, f"{res['added']} 列")
             for e in res.get("errors", []):
                 errors.append(f"明細 {code}: {e}")
             if not res.get("ok"):
@@ -2327,7 +2374,7 @@ class HttpSession:
                 if el.get("name", "").split("$")[-1] == "tbxScriptName":
                     payload[el.get("name")] = f"MCP draft {date.today():%Y%m%d}"
                     break
-        resp_save = self.post(first_site_path, payload)
+        resp_save = self.post(first_site_path, payload, retry_on_login=False)
         if "Login.aspx" in str(resp_save.url):
             return _result("", "", ok=False, reason="redirected to Login.aspx on save")
 
@@ -2354,7 +2401,7 @@ class HttpSession:
         # 7. 送出（RadButton3）：回應帶出 FirstSiteSend URL
         _refresh_viewstate(resp_save.text, payload)
         payload["__EVENTTARGET"] = "ctl00$MasterPageRadButton3"
-        resp_send = self.post(first_site_path, payload)
+        resp_send = self.post(first_site_path, payload, retry_on_login=False)
         send_html = resp_send.text
         m_fss = re.search(r"[~/][^\"'\s]*FirstSiteSend\.aspx\?[^\"'\s]*", send_html)
         if not m_fss:
@@ -2375,7 +2422,7 @@ class HttpSession:
         confirm_payload["__EVENTARGUMENT"] = ""
 
         # 9. 確定（RadButton2）→ 真正送進工作流
-        resp_confirm = self.post(fss_path, confirm_payload)
+        resp_confirm = self.post(fss_path, confirm_payload, retry_on_login=False)
         chtml = resp_confirm.text
         m_created = re.search(r"表單\s*([A-Za-z]{2,4}\d{6,})\s*已建立", chtml)
         form_number = m_created.group(1) if m_created else ""
@@ -2400,7 +2447,6 @@ class HttpSession:
         on `code_field`, else the first row (when `code` is empty), else None.
         """
         import json as _json
-        url = self._full_url(self._vpath + dialog_path)
         tree = self._parse(self.get(dialog_path))
         p = _form_state_payload(tree)
         for kf in tree.xpath("//input[@type='text'][@name]"):
@@ -2412,7 +2458,7 @@ class HttpSession:
                 break
         p["__EVENTTARGET"] = ""
         p["__EVENTARGUMENT"] = ""
-        t2 = _html_fromstring(self._client.post(url, data=p).text)
+        t2 = _html_fromstring(self.post(dialog_path, p).text)
         fallback = None
         for el in t2.xpath("//*[@jsonData] | //*[@jsondata]"):
             jd = _decode_json_attr(el.get("jsonData") or el.get("jsondata") or "")
@@ -2616,13 +2662,14 @@ class HttpSession:
         CPH = "ctl00$ContentPlaceHolder1$"
         p = (f"/WKF/FormUse/FreeTask/SignNodeForm.aspx"
              f"?TASK_ID={task_id}&SITE_ID={site_id}&NODE_SEQ={node_seq}")
-        url = self._full_url(self._vpath + p)
         pay = _form_state_payload(self._parse(self.get(p)))
         pay[CPH + "txtComment"] = comment or ("同意" if approve else "否決")
         pay["__EVENTTARGET"] = "ctl00$MasterPageRadButton3" if approve else "ctl00$MasterPageRadButton4"
         pay["__EVENTARGUMENT"] = ""
         pay["__LASTFOCUS"] = ""
-        r1 = self._client.post(url, data=pay)
+        r1 = self.post(p, pay, retry_on_login=False)
+        if "Login.aspx" in str(r1.url):
+            return {"ok": False, "reason": "session 已過期，未重送簽核 postback，請重試", "result": ""}
         if "ErrorReport" in str(r1.url):
             return {"ok": False, "reason": "簽核頁 postback 發生伺服器錯誤（表單本體可能不完整/未填必要內容）",
                     "result": ""}
@@ -2635,7 +2682,6 @@ class HttpSession:
                     "reason": f"未取得簽核確認頁（actionMode={am.group(1) if am else '?'}）；"
                               "同意未生效（可能該站需選填內容或表單不完整）"}
         cpath = m.group(1)
-        curl = self._full_url(self._vpath + cpath)
         p2 = _form_state_payload(self._parse(self.get(cpath)))
         p2[CPH + "rbListSignResult"] = "Approve" if approve else "Disapprove"
         if next_signer_guid:
@@ -2648,7 +2694,9 @@ class HttpSession:
         p2["__EVENTTARGET"] = "ctl00$MasterPageRadButton2"  # 送出
         p2["__EVENTARGUMENT"] = ""
         p2["__LASTFOCUS"] = ""
-        r2 = self._client.post(curl, data=p2)
+        r2 = self.post(cpath, p2, retry_on_login=False)
+        if "Login.aspx" in str(r2.url):
+            return {"ok": False, "reason": "session 已過期，未重送簽核確認，請重試", "result": ""}
         if "ErrorReport" in str(r2.url):
             return {"ok": False, "reason": "送出（簽核確認）發生伺服器錯誤", "result": ""}
         reds = sorted(set(re.findall(r"必填|請選擇|至少|請指定", r2.text)))
@@ -2678,7 +2726,7 @@ class HttpSession:
         pay[CPH + "rbGetBack"] = "rbDeleteApplyForm"          # 作廢表單
         pay[CPH + "txtReason"] = reason or "作廢"
         pay[CPH + "tbScriptName"] = ""
-        r = self.post(p, pay)
+        r = self.post(p, pay, retry_on_login=False)
         if "ErrorReport" in str(r.url):
             return {"ok": False, "reason": "作廢 postback 發生伺服器錯誤（可能非本人申請或單已結案）"}
         return {"ok": True, "reason": ""}
