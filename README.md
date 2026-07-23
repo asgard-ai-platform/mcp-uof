@@ -28,8 +28,7 @@ This project targets UOF first-generation web flows, driven over httpx.
 
 ### Install From Source
 
-The current PyPI release (`0.1.7`) contains the previous SOAP-based implementation and does not
-match this documentation. Until a new version is published, install and run the current source:
+Install and run the current source:
 
 ```bash
 git clone https://github.com/asgard-ai-platform/mcp-uof.git
