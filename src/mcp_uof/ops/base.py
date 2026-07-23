@@ -1,9 +1,9 @@
 """
 OpsBackend — protocol covering every WKF + system operation exposed as an MCP tool.
 
-Both SoapBackend and WebBackend implement this. The MCP tool layer in server.py
+`HttpWebBackend` (httpx + lxml 網頁機制) implements this. The MCP tool layer in server.py
 dispatches by calling `get_backend().<method>(...)` — it never reaches into the
-implementations directly. That keeps tool definitions stable as backends evolve.
+implementation directly. That keeps tool definitions stable as the backend evolves.
 """
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ from typing import Optional
 
 
 class OpsBackend(ABC):
-    """對外操作面（12 個工具）。OpsRouter 實作此介面；每個操作於開發期靜態綁定到某機制
-    （SOAP 或 web），見 ops.router。SoapBackend / WebBackend 是機制實作。"""
+    """Backend contract implemented by OpsRouter and HttpWebBackend."""
 
     # ── System ──────────────────────────────────────────────────────
     @abstractmethod
@@ -32,6 +31,16 @@ class OpsBackend(ABC):
     def get_task_data(self, task_id: str) -> str: ...
     @abstractmethod
     def get_task_result(self, task_id: str, include_form_data: bool = True) -> str: ...
+    @abstractmethod
+    def get_pending_sign_list(self) -> str: ...
+    @abstractmethod
+    def get_dialog_structure(self, form_version_id: str, field_code: str = "") -> str: ...
+    @abstractmethod
+    def search_dialog_options(self, form_version_id: str, field_code: str,
+                              keyword: str = "", limit: int = 20) -> str: ...
+    @abstractmethod
+    def operate_dialog(self, form_version_id: str, field_code: str,
+                       values: Optional[dict] = None, press: str = "") -> str: ...
 
     # ── WKF writes ──────────────────────────────────────────────────
     @abstractmethod
@@ -61,7 +70,7 @@ class OpsBackend(ABC):
         self, task_id: str, site_id: str, node_seq: int, signer_guid: str
     ) -> str: ...
 
-    # ── WKF search — UOF PublicAPI 無清單/搜尋 API，於 ops.router 綁定到 http_web 機制 ──
+    # ── WKF search ──────────────────────────────────────────────────
     @abstractmethod
     def query_forms(
         self,
@@ -69,18 +78,7 @@ class OpsBackend(ABC):
         date_from: str = "",
         date_to: str = "",
         max_results: int = 50,
+        query_mode: str = "apply",
     ) -> str: ...
     @abstractmethod
     def search_users(self, keyword: str) -> str: ...
-
-
-def web_not_implemented(method: str, hint: str = "") -> str:
-    """誠實能力說明：此操作的 web 機制實作尚未完成。
-
-    正常情況不會出現——這些操作在 ops.router 綁定到 SOAP 機制；只有在無 PublicAPI 的部署、
-    且該操作尚未補上 web 實作時才會走到。刻意不含任何「切換模式」指示：用哪種機制是 server
-    內部決定，使用者不需處理。"""
-    msg = f"⚠️ 目前無法提供 `{method}`：此操作的網頁機制實作尚未完成。"
-    if hint:
-        msg += f"\n💡 {hint}"
-    return msg

@@ -1,50 +1,35 @@
 # MCP UOF
 
-[![PyPI version](https://img.shields.io/pypi/v/mcp-uof.svg)](https://pypi.org/project/mcp-uof/)
-[![Python versions](https://img.shields.io/pypi/pyversions/mcp-uof.svg)](https://pypi.org/project/mcp-uof/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/issues)
-[![GitHub last commit](https://img.shields.io/github/last-commit/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/commits/main)
-[![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io/)
+[![PyPI version](https://img.shields.io/pypi/v/mcp-uof.svg)](https://pypi.org/project/mcp-uof/) [![Python versions](https://img.shields.io/pypi/pyversions/mcp-uof.svg)](https://pypi.org/project/mcp-uof/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) [![GitHub stars](https://img.shields.io/github/stars/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/stargazers) [![GitHub issues](https://img.shields.io/github/issues/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/issues) [![GitHub last commit](https://img.shields.io/github/last-commit/asgard-ai-platform/mcp-uof.svg)](https://github.com/asgard-ai-platform/mcp-uof/commits/main) [![MCP compatible](https://img.shields.io/badge/MCP-compatible-blue.svg)](https://modelcontextprotocol.io/)
 
 [繁體中文](README.zh-TW.md)
 
-An open-source [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that wraps UOF (U-Office Force) SOAP/ASMX services into AI-callable tools for workflow automation.
+An open-source [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that turns UOF (U-Office Force) workflow operations into AI-callable tools, driven entirely through httpx web automation.
 
-Built for Claude Code, Claude Desktop, VS Code, and any MCP-compatible client. It lets AI agents query workflow forms, inspect form schemas, submit forms, track workflow progress, and close workflow tasks through natural language.
+Built for Claude Code, Claude Desktop, VS Code, and any MCP-compatible client. It lets AI agents query workflow forms, inspect form schemas, submit forms, track workflow progress, sign off, and close workflow tasks through natural language.
 
 ## What This Does
 
-- **12 ready-to-use tools** for UOF workflow operations, including authentication checks, form discovery, schema lookup, workflow preview, form submission, task status, task result, and task closure.
-- **MCP server** over stdio for local AI clients, plus an optional SSE server for HTTP integrations.
-- **Tool-first interface**: users call the same tools regardless of whether the implementation uses SOAP/PublicAPI or httpx web scraping internally.
+- **17 exposed tools** for UOF workflow operations. `preview_workflow` and `get_external_form_list` currently return capability guidance rather than live data.
+- **MCP server** over stdio for local AI clients.
+- **Tool-first interface**: users call the same tools without ever choosing a mechanism — how each tool talks to UOF is an internal, developer-time decision.
 - **Single identity model**: one server process represents one UOF account configured through environment variables.
-- **SOAP and httpx web support**: SOAP is used where PublicAPI supports the operation; httpx + lxml web scraping fills gaps such as form listing, form structure lookup, and form submission. No Playwright or Chromium required — works on Alpine Linux.
+- **httpx web automation**: operations use HTTPS requests (`httpx` + `lxml`) against UOF's `aspx`/`ashx` endpoints, without a browser runtime. On Alpine Linux or musl, ensure binary wheels or native build dependencies are available.
 
 ## API Reference
 
-This project targets UOF first-generation SOAP/ASMX services and selected web flows.
+This project targets UOF first-generation web flows, driven over httpx.
 
-- Authentication: UOF account/password encrypted with the configured RSA public key for SOAP token access; httpx web flows maintain a cookie session independently.
+- Authentication: UOF account/password posted to `Login.aspx`, maintaining a cookie session.
 - Base URL: configured with `UOF_BASE_URL`, for example `https://your-uof-domain.com/VirtualPath`.
 - Required UOF settings: see [docs/configuration.md](docs/configuration.md).
 
 ## Quick Start
 
-### Install
+### Install From Source
 
-```bash
-pip install mcp-uof
-```
-
-Or use uvx:
-
-```bash
-uvx --from mcp-uof mcp-uof
-```
-
-For local development from source:
+The current PyPI release (`0.1.7`) contains the previous SOAP-based implementation and does not
+match this documentation. Until a new version is published, install and run the current source:
 
 ```bash
 git clone https://github.com/asgard-ai-platform/mcp-uof.git
@@ -57,8 +42,6 @@ Set the required environment variables:
 
 ```bash
 export UOF_BASE_URL=https://your-uof-domain.com/VirtualPath
-export UOF_APP_NAME=your_app_name
-export UOF_RSA_PUBLIC_KEY=your_rsa_public_key_base64
 export UOF_ACCOUNT=your_account
 export UOF_PASSWORD=your_password
 ```
@@ -76,8 +59,6 @@ Or with environment variables inline:
 ```bash
 claude mcp add --transport stdio uof \
   -e UOF_BASE_URL=https://your-uof-domain.com/VirtualPath \
-  -e UOF_APP_NAME=your_app_name \
-  -e UOF_RSA_PUBLIC_KEY=your_rsa_public_key_base64 \
   -e UOF_ACCOUNT=your_account \
   -e UOF_PASSWORD=your_password \
   -- mcp-uof
@@ -100,8 +81,6 @@ Add to your `claude_desktop_config.json`:
       "command": "mcp-uof",
       "env": {
         "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_APP_NAME": "your_app_name",
-        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
         "UOF_ACCOUNT": "your_account",
         "UOF_PASSWORD": "your_password"
       }
@@ -120,8 +99,6 @@ Or with a local checkout:
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
         "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_APP_NAME": "your_app_name",
-        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
         "UOF_ACCOUNT": "your_account",
         "UOF_PASSWORD": "your_password"
       }
@@ -132,21 +109,23 @@ Or with a local checkout:
 
 See [docs/integration.md](docs/integration.md) and [examples/](examples/) for more client configuration examples.
 
-## Tools (12)
+## Tools (17)
 
 All tool names use the `uof_custom_` prefix.
 
 | Domain | Tools |
-|--------|-------|
+| --- | --- |
 | System | `check_auth` |
-| WKF Workflow | `get_form_list`, `get_external_form_list`, `query_forms`, `get_form_structure`, `get_form_structure_by_id`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `terminate_task`, `sign_next` |
+| WKF Workflow | `get_form_list`, `get_external_form_list`, `query_forms`, `get_pending_sign_list`, `search_users`, `get_form_structure`, `get_form_structure_by_id`, `get_dialog_structure`, `search_dialog_options`, `operate_dialog`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `sign_next`, `terminate_task` |
 
 Important behavior and constraints:
 
-- UOF first-generation PublicAPI does not provide an inbox or pending-task list API. Users must provide a TaskId from the UOF UI or notification email.
-- UOF does not provide a general per-step approval API. Single-step free-flow approvals can be represented through `terminate_task` with `Adopt` or `Reject` when used by the current signer.
-- `terminate_task` can overwrite already-closed results at the API layer; this server checks task status first and blocks repeated closure.
-- `query_forms`, `get_form_structure`, and `apply_form` use httpx + lxml web scraping when SOAP intermediary fields cannot represent the full form body. No browser or Playwright installation required.
+- `get_pending_sign_list` returns every form awaiting the current identity's signature (with TaskId/SiteId/NodeSeq), sourced from the Homepage pending-sign widget. `query_forms` is a different set — the forms you submitted or signed, by date range (`query_mode` = `apply`/`sign`). Ask "what do I need to sign?" → `get_pending_sign_list`.
+- Composite fields (line items, vendor pickers, expense details) live inside **dialogs**. Use `get_dialog_structure` to see a dialog field's inner controls, `search_dialog_options` to look up real picker candidates (never fabricate codes), and pass them into `apply_form` via the `_lookups` / `_fill_before` / `_press_after` / `_rows` reserved keys. `operate_dialog` is a probe only — it cannot accumulate rows.
+- `sign_next` performs approval for the current pending step and can close the flow or route to a designated next signer. It does not accept a signing comment; return, parallel/countersign, and fixed-flow stepping still require the Web UI.
+- `terminate_task` closes a task: `Cancel` voids an in-flight form (via the web recall page), `Adopt`/`Reject` approve/reject through the web sign flow. It checks task status first and blocks repeated closure of an already-closed task.
+- `preview_workflow` (flow simulation) is not available over httpx and directs the user to the Web UI; you can still submit directly with `apply_form` and inspect the real signing route afterward with `get_task_result`.
+- `apply_form` always submits as the configured `UOF_ACCOUNT`. Its `applicant_account` and `first_signer_account` parameters are currently retained for interface compatibility but do not change the submitted identity or routing.
 
 See [docs/tools.md](docs/tools.md) for full tool specs, role model, examples, and operational boundaries.
 
@@ -154,11 +133,10 @@ See [docs/tools.md](docs/tools.md) for full tool specs, role model, examples, an
 
 ```text
 mcp-uof/
-├── src/mcp_uof/                 # MCP server, auth, routing, SOAP/web backends
+├── src/mcp_uof/                 # MCP server, auth (web session), routing, httpx web backend
 ├── docs/                        # Architecture, configuration, integration, tools, testing
 ├── examples/                    # Claude Desktop and VS Code MCP config examples
-├── scripts/                     # RSA key and WSDL helper scripts
-├── tests/                       # smoke / e2e / mounted test layers
+├── tests/                       # smoke / mounted test layers
 ├── .env.example                 # Environment variable template
 ├── README.zh-TW.md              # Traditional Chinese README
 └── pyproject.toml
@@ -175,7 +153,6 @@ uv run python -m compileall src tests
 Tests that connect to a real UOF test environment require `.env`:
 
 ```bash
-uv run python tests/run.py e2e
 uv run python tests/run.py mounted
 ```
 

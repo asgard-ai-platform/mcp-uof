@@ -15,8 +15,6 @@
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
         "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_APP_NAME": "your_app_name",
-        "UOF_RSA_PUBLIC_KEY": "your_rsa_public_key_base64",
         "UOF_ACCOUNT": "your_account",
         "UOF_PASSWORD": "${input:uof_password}"
       }

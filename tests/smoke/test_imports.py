@@ -2,8 +2,7 @@
 Smoke — 模組匯入（離線；無網路 / 無 UOF / 無子程序）。
 
 自動探索 src/mcp_uof 下所有模組並逐一 import，確保語法、相依、循環匯入皆無誤。
-改用自動探索（而非手動清單）以避免與實際套件結構漂移——例如新增 domain 或漏列 sse_server。
-注意：import ops.web 不會載入 Playwright（lazy，至 WebBackend 實例化才載），故此測試無需瀏覽器。
+使用自動探索避免手動模組清單與實際套件結構漂移。
 
 執行：uv run python tests/smoke/test_imports.py
 """

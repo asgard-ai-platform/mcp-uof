@@ -3,7 +3,7 @@
 *.pem
 *.key
 
-# WSDL 快照含真實主機名，不入庫；需要時以 scripts/fetch_all_wsdls.py 重新抓取
+# Generated WSDL snapshots may contain real hostnames.
 references/wsdl/
 
 # Python
@@ -41,3 +41,10 @@ htmlcov/
 
 # Credentials
 .uof/
+
+# Deployment-specific agent instructions
+/skills/
+
+# 測試產物（含真實單號/TaskId，機敏，不入公開 repo）
+e2e_results.json
+*.png

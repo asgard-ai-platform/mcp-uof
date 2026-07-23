@@ -17,13 +17,12 @@ Report privately to the repository maintainers through your normal security cont
 
 ## Credential Handling
 
-- Never commit `.env`, UOF accounts or passwords, RSA key pairs, generated tokens, generated reports, or local credential files.
-- The MCP server operates with the plaintext `UOF_ACCOUNT` / `UOF_PASSWORD` from `.env`; the code RSA-encrypts them before sending. Keep `.env` out of version control.
+- Never commit `.env`, UOF accounts or passwords, generated reports, or local credential/cookie files.
+- The MCP server logs in with the plaintext `UOF_ACCOUNT` / `UOF_PASSWORD` from `.env` (posted to UOF's `Login.aspx` over HTTPS, maintaining a cookie session). Keep `.env` out of version control.
 - Use `.env.example` for placeholders only.
 - Treat manual and end-to-end test outputs as sensitive unless reviewed and sanitized.
 
 ## Deployment Notes
 
-- `UOF_VERIFY_SSL=false` is only intended for test environments with incomplete or self-signed certificates.
+- `UOF_SSL_VERIFY=false` is only intended for test environments with incomplete or self-signed certificates.
 - Use strict SSL verification in production.
-- The SSE demo token mechanism (`MCP_SSE_TEST_TOKEN`) is for local testing. Replace it with real token verification before deploying an exposed service.

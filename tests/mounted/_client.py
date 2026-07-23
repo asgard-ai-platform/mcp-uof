@@ -1,11 +1,4 @@
-"""
-mounted/_client.py — 把 MCP server 當「真實 OS 子程序」掛載的樣板。
-
-與 Claude Desktop / VS Code 在 mcp.json 綁定的執行路徑位元級一致：
-  command=sys.executable, args=["-m","mcp_uof.server"], env=身份, cwd=repo根
-經官方 SDK 的 stdio_client + ClientSession 走 stdio JSON-RPC。
-身份只由注入的 env 決定（一份設定 = 一個身份）。
-"""
+"""Helpers for mounting the MCP server as a stdio subprocess."""
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -17,10 +10,7 @@ import _common
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp import ClientSession
 
-# 對外工具固定名稱集合（共 12 個）。供註冊護欄斷言。
-# 工具是唯一對外面向；每個工具用哪種機制（SOAP/web）對使用者透明：多數由 ops.router 的 BINDING
-# 在開發期綁定；起單(apply_form/preview/get_form_structure)則再依 ops/web_apply 的設計期登錄表
-# 對「網頁起單的單種(如採購單)」內部分派到 web handler，否則走 SOAP 中介——使用者一律只呼叫同一個工具。
+# Public tool names used by the registration guard.
 EXPECTED_TOOLS = {
     "uof_custom_check_auth",
     "uof_custom_get_form_list",
@@ -31,20 +21,19 @@ EXPECTED_TOOLS = {
     "uof_custom_apply_form",
     "uof_custom_get_task_data",
     "uof_custom_get_task_result",
+    "uof_custom_get_pending_sign_list",
+    "uof_custom_get_dialog_structure",
+    "uof_custom_search_dialog_options",
+    "uof_custom_operate_dialog",
     "uof_custom_terminate_task",
     "uof_custom_query_forms",
+    "uof_custom_search_users",
     "uof_custom_sign_next",
 }
 
 
 def env_for(account: str, dotenv: dict, password=None, home=None) -> dict:
-    """模擬 mcp.json 的 env 區塊：注入身份與設定（沒有 mode 可設——機制是內部決定）。
-
-    重點：MCP SDK 對 stdio 子程序只繼承白名單環境變數（HOME/PATH/…），UOF_* 不會自動帶過去。
-    這裡直接灌 os.environ 全集 + .env，再覆寫 UOF_ACCOUNT（必要時覆寫密碼以測負向認證）。
-    home：覆寫 HOME 以指向一個全新的憑證快取目錄（~/.uof）。負向認證測試需要它，否則子程序會
-    命中先前真實執行留下的快取 token，使 require_auth 即使密碼錯也通過。
-    """
+    """Build the explicit environment passed to a mounted stdio server."""
     env = {**os.environ, **dotenv, "UOF_ACCOUNT": account}
     if password is not None:
         env["UOF_PASSWORD"] = password

@@ -1,205 +1,82 @@
-# 實際操作對話
+# 操作範例
 
-本文件是一段模擬操作範例，呈現透過 stdio MCP 協定（與 Claude Desktop、VS Code Chat
-相同的連線方式）對 Server 發出的工具呼叫與回應。主機名稱、本機路徑與識別資訊皆使用佔位符。
+以下以佔位符示範一般流程。實際欄位、表單版本與輸出內容依 UOF 站台而異。
 
-> 本對話以採購單為例。工具底層用哪種機制取得資料對使用者透明（例如 `query_forms` 內部走網頁），
-> 使用者只面對工具本身。
+## 1. 確認身份與表單
 
-採購單為單一簽核站的自由流程：申請人 `applicant_account` 發起，第一站送主管 `manager_account`。
-以下四段對話分別由綁定不同帳號的 Server 處理，示範「一份設定對應一個身份、切換身份就是切換設定」。
+先用 `uof_custom_check_auth` 建立並確認目前 server entry 綁定的 session：
 
----
-
-## 一、申請人發起採購單
-
-由綁定 `applicant_account`（申請人）的 Server 處理。
-
-**使用者：先確認我現在是用哪個帳號登入。**
-
-呼叫 `uof_custom_check_auth`：
-
-```
-Token 有效，目前以 applicant_account 的身份操作。
-   剩餘效期約 18843 分鐘。
-Base URL: https://<你的-UOF-站台>
-憑證路徑: ~/.uof/credentials-applicant_account-<hash>.json
-要改以其他人的身份操作，請切換 MCP 設定（一份設定 = 一個身份）。
+```text
+uof_custom_check_auth()
 ```
 
-**使用者：系統裡有哪些表單？我要發採購單。**
+從表單清單取得 `formId` 與 `formVersionId`，再查欄位：
 
-呼叫 `uof_custom_get_form_list`（節錄）：
-
-```
-表單清單：
-【人資類表單】 (ID: b3e353c0-...)
-【不匯入正式區】 (ID: 0df5ff7a-...)
-  - 員工費用報支 (代碼: a2158413-...)
-  ...
-（清單中含「採購單」）
+```text
+uof_custom_get_form_structure_by_id(form_id="<form-id>")
 ```
 
-**使用者：採購單需要填哪些欄位？**
+若欄位標示為 dialog，依序使用：
 
-呼叫 `uof_custom_get_form_structure_by_id`，帶入採購單的 formId：
-
-```
-表單 <form-id> 的欄位清單：
-  - [FORM_NO] 表單編號〈autoNumber〉
-  - [PO_Main] 主要欄位〈optionalField〉
-  - [MEMO] 備註〈multiLineText〉
-  - [ATTACH_FILES] 附件〈fileButton〉
+```text
+uof_custom_get_dialog_structure(form_version_id="<form-version-id>", field_code="<field-code>")
+uof_custom_search_dialog_options(form_version_id="<form-version-id>", field_code="<field-code>", keyword="<keyword>")
 ```
 
-**使用者：幫我填一張，備註寫「辦公室耗材採購」，送主管簽。先模擬流程確認沒問題再送。**
+## 2. 起單與回讀
 
-呼叫工具時以結構化參數傳入即可，不需自行組 XML（`form_version_id` 為此次紀錄的快照值；
-表單版本會隨重新發佈而變，實際使用時請以 `get_form_list` 取得當前版本）：
+`preview_workflow` 目前只回傳能力說明，不會驗證流程或參數。`apply_form` 會直接異動資料，送出前應先確認欄位內容。
 
-```
-form_version_id   = <由 get_form_list 取得的採購單當前版本>
-applicant_account = applicant_account
-first_signer_account = manager_account
-fields = { "FORM_NO": "", "MEMO": "辦公室耗材採購" }   # 欄位以 get_form_structure_by_id 回傳者為準
-```
-
-先用相同參數呼叫 `uof_custom_preview_workflow`（不會真的起單）確認流程可走，
-再呼叫 `uof_custom_apply_form` 正式送出：
-
-```
-表單申請成功！
-  - 工作代號 (TaskId): 00000000-0000-0000-0000-000000000000
+```text
+uof_custom_apply_form(
+  form_version_id="<form-version-id>",
+  applicant_account="<configured-account>",
+  first_signer_account="",
+  fields={"<field-id>": "<value>"}
+)
 ```
 
-**使用者：這張單現在的狀態？**
+實際申請身份固定為該 server process 的 `UOF_ACCOUNT`。目前 `applicant_account` 與 `first_signer_account` 是相容性參數，不會改變身份或首站路由；需要指定首站簽核者時請使用 UOF Web UI。
 
-呼叫 `uof_custom_get_task_data`：
+成功後保存回傳的 `TaskId`，並立即回讀內容：
 
-```
-表單申請內容：
-  - 申請者: applicant_account
-  - 簽核結果: 簽核中
-```
-
-TaskId 是後續查詢與簽核的唯一依據。系統沒有「待簽清單」查詢，申請人需把 TaskId
-交給主管，或主管從 UOF 的通知信取得。
-
----
-
-## 二、主管查詢並核准
-
-切換到綁定 `manager_account`（主管）的 Server，帶入上一段取得的 TaskId。
-
-**使用者：我現在是哪個身份？**
-
-呼叫 `uof_custom_check_auth`：
-
-```
-Token 有效，目前以 manager_account 的身份操作。
-Base URL: https://<你的-UOF-站台>
-憑證路徑: ~/.uof/credentials-manager_account-<hash>.json
+```text
+uof_custom_get_task_data(task_id="<task-id>")
+uof_custom_get_task_result(task_id="<task-id>", include_form_data=true)
 ```
 
-兩個 Server 的憑證以身份分別快取，互不影響。
+## 3. 查詢與簽核
 
-**使用者：這張單（16d9bb5f-…）的內容和目前進度？**
+切換到簽核者的 server entry 後，用待簽清單取得目前輪到該帳號處理的工作：
 
-呼叫 `uof_custom_get_task_result`：
-
-```
-表單 16d9bb5f-... 的簽核記錄：
-  申請者: applicant_account | 最終結果: 簽核中
-
-簽核歷程：
-  站點 0 (sign): applicant_account → 同意 (2026/06/11 23:36)
-    意見: 辦公室耗材採購
-  站點 1 (sign): manager_account → 待簽
+```text
+uof_custom_get_pending_sign_list()
 ```
 
-歷程顯示表單停在主管這一站（站點 1 為「待簽」）。
+同意目前站點：
 
-**使用者：我同意這張採購單。**
-
-呼叫 `uof_custom_terminate_task`，動作為 `Adopt`：
-
-```
-表單同意成功
+```text
+uof_custom_sign_next(task_id="<task-id>")
 ```
 
-**使用者：確認核准後的結果。**
+若需同意後送下一位簽核者，先用 `uof_custom_search_users` 取得 `UserGuid`，再傳入 `signer_guid`。`sign_next` 不接受簽核意見；退簽、並簽、會簽與固定流程逐站推進仍需使用 UOF Web UI。
 
-再次呼叫 `uof_custom_get_task_result`：
+否決目前待簽工作可使用：
 
-```
-表單 16d9bb5f-... 的簽核記錄：
-  申請者: applicant_account | 最終結果: 同意
-
-簽核歷程：
-  站點 0 (sign): applicant_account → 同意 (2026/06/11 23:36)
-  站點 1 (sign): manager_account → 同意 (2026/06/11 23:37)
+```text
+uof_custom_terminate_task(task_id="<task-id>", result="Reject", reason="<comment>")
 ```
 
-主管的核准記錄在主管本人名下，與在 UOF 網頁簽核同意的結果一致。
+`reason` 會作為簽核意見送出。實際可操作範圍由該帳號在 UOF 中的權限決定。
 
----
+## 4. 撤回與狀態防護
 
-## 三、申請人撤回自己的單
+申請者可對自己有權限撤回的簽核中表單執行：
 
-由綁定 `applicant_account`（申請人）的 Server 處理。申請人發起一張新單後決定撤回。
-
-**使用者：剛那張不買了，幫我作廢。**
-
-先以 `uof_custom_apply_form` 起一張單，再呼叫 `uof_custom_terminate_task`，動作為 `Cancel`：
-
-```
-表單作廢成功
+```text
+uof_custom_terminate_task(task_id="<task-id>", result="Cancel", reason="<reason>")
 ```
 
-呼叫 `uof_custom_get_task_data` 確認：
+工具會先查詢目前狀態，避免重複操作已結案的表單。完成後以 `get_task_data` 或 `get_task_result` 再次確認結果。
 
-```
-表單申請內容：
-  - 申請者: applicant_account
-  - 簽核結果: 作廢
-  - 結案日期: 2026/06/11 23:37:08
-```
-
-申請人可以作廢自己發起的單，不需要管理員介入。
-
----
-
-## 四、管理員強制結案，並驗證重複結案會被擋下
-
-由綁定 `admin`（管理員）的 Server 處理。情境是一張卡住的單需要直接結案。
-
-呼叫 `uof_custom_check_auth` 確認身份為 `admin` 後，對一張簽核中的單呼叫
-`uof_custom_terminate_task`，動作為 `Cancel`：
-
-```
-表單作廢成功
-```
-
-`uof_custom_get_task_data` 確認已作廢。**接著對同一張已結案的單再次呼叫
-`uof_custom_terminate_task`**：
-
-```
-表單已結案（結果: 作廢），不可再結案。
-注意: UOF API 本身不會阻擋此操作且會覆寫最終結果，已由工具層攔截。
-```
-
-UOF 後端對已結案的表單再次結案會回報成功並覆寫原結果，本工具在送出前先查詢狀態，
-攔截了這個會破壞資料的操作。
-
----
-
-## 對照表
-
-| 對話 | 操作身份 | 用到的工具 |
-|---|---|---|
-| 一、發起採購單 | `applicant_account`（申請人） | check_auth、get_form_list、get_form_structure_by_id、preview_workflow、apply_form、get_task_data |
-| 二、查詢與核准 | `manager_account`（主管） | check_auth、get_task_result、terminate_task |
-| 三、撤回自己的單 | `applicant_account`（申請人） | apply_form、terminate_task、get_task_data |
-| 四、強制結案與防護 | `admin`（管理員） | check_auth、terminate_task、get_task_data |
-
-各工具的完整規格與能力邊界見 [tools.md](tools.md)；綁定與身份切換見 [integration.md](integration.md)。
+完整工具契約見 [tools.md](tools.md)；身份綁定見 [integration.md](integration.md)。

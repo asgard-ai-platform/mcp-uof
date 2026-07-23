@@ -12,7 +12,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
 
     steps:
       - name: Check out repository
