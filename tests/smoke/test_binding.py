@@ -14,7 +14,8 @@ from mcp_uof.ops.router import OpsRouter, BINDING, mechanisms_for
 
 # All currently registered operations use the HTTP web backend.
 EXPECTED = {op: "http_web" for op in (
-    "check_auth", "get_form_list", "get_external_form_list",
+    "check_auth", "login", "logout",
+    "get_form_list", "get_external_form_list",
     "get_form_structure", "get_form_structure_by_id",
     "get_task_data", "get_task_result", "get_pending_sign_list", "get_dialog_structure", "search_dialog_options", "operate_dialog",
     "preview_workflow", "apply_form", "terminate_task",
@@ -33,7 +34,8 @@ def main() -> int:
 
     ops_methods = {n for n, v in vars(OpsBackend).items()
                    if getattr(v, "__isabstractmethod__", False)}
-    failures += _common.check("BINDING 鍵集 = OpsBackend 抽象方法集（17）", set(BINDING) == ops_methods,
+    failures += _common.check(f"BINDING 鍵集 = OpsBackend 抽象方法集（{len(EXPECTED)}）",
+                               set(BINDING) == ops_methods,
                                f"差異={set(BINDING) ^ ops_methods}")
 
     # ── 2) router 委派到 HttpWebBackend（惰性建立，不連線）──────────
@@ -91,6 +93,28 @@ def main() -> int:
     except ValueError as e:
         failures += _common.check("工具本體例外不被吞掉", str(e) == "tool exploded" and calls == ["session"],
                                    f"calls={calls}, e={e}")
+
+    # 3e) 尚未登入（BrowserLoginRequired）→ 回 🔑 指路訊息，不可回 🔒 設定錯誤
+    #     兩者給 AI 的指示完全相反：🔑 是「去開登入頁」，🔒 是「去改設定」，混淆會讓 AI 誤導使用者。
+    class NeedsLogin:
+        def ensure_valid(self):
+            raise ab.BrowserLoginRequired("沒有可用的既有 session")
+
+    ab.get_session_provider = lambda: NeedsLogin()
+    r = make("uof_custom_query_forms")()
+    failures += _common.check("未登入 → 回 🔑 並指名 uof_custom_login",
+                               "🔑" in r and "uof_custom_login" in r and "🔒" not in r, r[:60])
+
+    # 3f) session 在通過閘門之後才失效：工具本體拋 BrowserLoginRequired 也要轉成 🔑，
+    #     不可讓例外冒出去害 MCP client 收到 isError。
+    ab.get_session_provider = lambda: OK("session")
+
+    def expired(*args, **kwargs):
+        raise ab.BrowserLoginRequired("session 於操作中失效")
+    expired.__name__ = "uof_custom_apply_form"
+    r = ab.require_auth(expired)()
+    failures += _common.check("工具本體拋 BrowserLoginRequired → 轉成 🔑 字串",
+                               "🔑" in r and "uof_custom_login" in r, r[:60])
 
     ab.reset_provider_for_tests()  # 還原快取
     print("=" * 50)

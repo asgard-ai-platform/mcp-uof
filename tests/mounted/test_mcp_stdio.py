@@ -1,6 +1,8 @@
 """Mounted stdio JSON-RPC tests against the configured isolated UOF environment."""
 import asyncio
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tests/ — 供 import _common
@@ -9,7 +11,14 @@ import _common
 _dotenv = _common.load_env()
 if not _common.has_live_env():
     print(f"⏭️  跳過 mounted：缺少真實環境設定 {_common.missing_env()}（請設定 mcp-uof/.env）")
-    sys.exit(0)
+    sys.exit(77)   # 77 = SKIP，讓 tests/run.py 與 PASS 分開顯示
+
+# 登入成功會把 session 寫到磁碟，所以要隔離 HOME：既不污染開發者本機，也避免下面「負向認證」
+# 那段（同一帳號）載入前面存下的有效 session 而失效。設在 os.environ 上，子程序與程序內的
+# resolve_form_httpx() 一併隔離。
+_RUN_HOME = tempfile.mkdtemp(prefix="uof-mounted-home-")
+os.environ["HOME"] = _RUN_HOME
+_NEG_HOME = tempfile.mkdtemp(prefix="uof-mounted-neg-")   # 負向認證用全新的，確保無 session 可沿用
 
 import _client  # noqa: E402  (在 path 設定後 import)
 from _client import EXPECTED_TOOLS, mounted_session, call, tool_names
@@ -33,7 +42,7 @@ async def run() -> int:
     wf_name = _common.workflow_form_name()
     if not wf_name:
         print("⏭️  跳過 mounted：未設定 UOF_TEST_WORKFLOW_FORM_NAME（工作流程情境需要一張原生表單名）")
-        return 0
+        return 77   # SKIP
     wf_form_id, wf_version = _common.resolve_form_httpx(wf_name)
     assert wf_version, f"找不到 {wf_name} 的已發佈版本"
     print("ℹ️ 已解析隔離測試表單版本")
@@ -54,12 +63,12 @@ async def run() -> int:
         print("═" * 60)
         async with mounted_session(applicant, _dotenv) as s:
             names = await tool_names(s)
-            check(f"expose 剛好 17 個工具（得 {len(names)}）", names == EXPECTED_TOOLS,
+            check(f"expose 剛好 {len(EXPECTED_TOOLS)} 個工具（得 {len(names)}）", names == EXPECTED_TOOLS,
                   f"差異={names ^ EXPECTED_TOOLS}")
             r = await call(s, "uof_custom_query_forms", {"max_results": 5})
             check("query_forms 直接回清單（透明，無模式字樣）",
                   _common.ok(r) and "查詢表單" in r
-                  and "UOF_OPS_MODE" not in r and "切換" not in r and "不支援" not in r,
+                  and "切換" not in r and "不支援" not in r,
                   r[:160])
 
         # ── 2) 多身份工作流程全程 ────────────────────────────────────
@@ -148,11 +157,28 @@ async def run() -> int:
         print("\n" + "═" * 60)
         print("  3) 負向認證：壞密碼 → 🔒 而非 crash / isError")
         print("═" * 60)
-        async with mounted_session(applicant, _dotenv, password="__definitely_wrong__") as s:
+        # home=_NEG_HOME：不可沿用前面段落存下的有效 session，否則這段根本測不到壞密碼。
+        async with mounted_session(applicant, _dotenv, password="__definitely_wrong__",
+                                   home=_NEG_HOME) as s:
             r = await call(s, "uof_custom_check_auth")
             check("check_auth 回未登入狀態", "未登入" in r, r[:80])
             r = await call(s, "uof_custom_get_form_list")
             check("require_auth 工具回 🔒 字串（非 isError）", "🔒" in r, r[:80])
+
+        # ── 4) 登入態管理工具（logout / 已登入時的 login）────────────
+        print("\n" + "═" * 60)
+        print("  4) logout 與已登入時的 login")
+        print("═" * 60)
+        async with mounted_session(applicant, _dotenv) as s:
+            r = await call(s, "uof_custom_check_auth")
+            check("操作前已登入", "✅" in r, r[:80])
+            r = await call(s, "uof_custom_login")
+            check("已登入時 login 直接回報、不開瀏覽器", "已經是登入狀態" in r, r[:80])
+            r = await call(s, "uof_custom_logout")
+            check("logout 回報成功", "✅" in r, r[:80])
+            # logout 只清本地 session；有帳密備援時下次操作會自動重登，這是預期行為。
+            r = await call(s, "uof_custom_get_form_list")
+            check("logout 後帳密備援自動重登", _common.ok(r) and "formVersionId" in r, r[:80])
 
     finally:
         # 保證清理：任何中途失敗都不留簽核中表單。已結案者再 Cancel 會被擋下，無妨。
