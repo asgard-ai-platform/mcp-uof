@@ -331,7 +331,7 @@ def uof_custom_query_forms(
     ] = "",
     max_results: Annotated[
         int,
-        Field(description="最多回幾筆（會自動翻頁湊滿；預設 50，UOF 一頁通常 10–20 筆）"),
+        Field(description="最多回傳幾筆（會翻頁掃描日期範圍後截斷；預設 50）"),
     ] = 50,
     query_mode: Annotated[
         str,
@@ -346,8 +346,8 @@ def uof_custom_query_forms(
     ⚠️ 這不是待簽清單：query_mode=apply 查的是「自己申請的單」、sign 是「自己簽過的單」，
     都跟「現在輪到我簽」是不同集合。問「有多少單要我簽」請用 get_pending_sign_list。
 
-    限制：範圍等同使用者在 UOF 網頁「查詢表單」頁所看到的；會翻頁到湊滿 max_results 為止，
-    因此 max_results 給太小會看起來像「只有這些」。"""
+    apply 模式除送出 UOF 日期條件外，還會依結果中的申請時間做本地邊界檢查，避免部署端忽略
+    日期控制項時混入範圍外資料。max_results 只限制顯示筆數，不會拿範圍外資料補滿。"""
     return get_backend().query_forms(keyword, date_from, date_to, max_results, query_mode)
 
 

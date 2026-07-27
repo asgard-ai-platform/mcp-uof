@@ -774,6 +774,22 @@ def _resolve_checkbox_value(options: list, value) -> tuple:
     return False, "", f"值『{value}』不是有效 checkbox 選項{hint}"
 
 
+def _uof_row_date(row: dict, query_mode: str) -> Optional[date]:
+    """Extract the date used by query_forms from one rendered result row."""
+    # The result grid exposes apply/close time, but not the time at which this user signed.
+    # Therefore only apply-mode has a trustworthy client-side date source.
+    if query_mode != "apply":
+        return None
+    raw = row.get("apply_time", "") or ""
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", raw)
+    if not m:
+        return None
+    try:
+        return date(*(int(v) for v in m.groups()))
+    except ValueError:
+        return None
+
+
 def _parse_filled_form_fields(tree) -> list:
     """Extract the filled-in field values of a rendered form (ViewForm / SignNodeForm).
 
@@ -1547,6 +1563,14 @@ class HttpSession:
         dt_dash = dt_raw.replace("/", "-")
         df_slash = df_dash.replace("-", "/")
         dt_slash = dt_dash.replace("-", "/")
+        try:
+            df_date = date.fromisoformat(df_dash)
+            dt_date = date.fromisoformat(dt_dash)
+        except ValueError:
+            return {"ok": False, "rows": [],
+                    "reason": "date_from / date_to 需為 yyyy/mm/dd 或 yyyy-mm-dd"}
+        if df_date > dt_date:
+            return {"ok": False, "rows": [], "reason": "date_from 不可晚於 date_to"}
 
         date_prefix = "ctl00$ctl00$ContentPlaceHolder1$RightContentPlaceHolder$"
         payload = dict(hidden)
@@ -1598,35 +1622,46 @@ class HttpSession:
         seen = {r["task_id"] for r in all_rows if r["task_id"]}
         kw = (keyword or "").strip().lower()
 
-        # 關鍵字模式要蒐齊全集才能過濾；無關鍵字也要翻到湊滿 max_results。
-        if kw or len(all_rows) < max_results:
-            cond = {k: v for k, v in payload.items()
-                    if k.startswith(date_prefix) and not k.endswith("wibQuery")}
-            grid = date_prefix + "grdQuery"
-            cur = resp2
-            for page in range(2, 40):   # backstop：至多 ~40 頁
-                if not kw and len(all_rows) >= max_results:
-                    break
-                h = _parse_hidden_fields(self._parse(cur))
-                h.update(cond)                         # pager postback 必須重帶條件欄位，否則伺服器用預設重繫結
-                h.pop(date_prefix + "wibQuery", None)  # 翻頁不按查詢鈕
-                h["__EVENTTARGET"] = grid
-                h["__EVENTARGUMENT"] = f"Page${page}"
-                cur = self.post(_FORM_QUERY_PATH, h)
-                if "Login.aspx" in str(cur.url) or "ErrorReport" in str(cur.url):
-                    break
-                new = [r for r in _parse_rows(self._parse(cur))
-                       if r["task_id"] and r["task_id"] not in seen]
-                if not new:
-                    break
-                seen.update(r["task_id"] for r in new)
-                all_rows.extend(new)
+        # UOF deployments have been observed ignoring the posted date controls. Keep the server
+        # filter for efficiency, but enforce the advertised date boundary locally as well.
+        def _in_range(row: dict) -> bool:
+            if query_mode != "apply":
+                return True
+            d = _uof_row_date(row, query_mode)
+            return d is not None and df_date <= d <= dt_date
 
+        cond = {k: v for k, v in payload.items()
+                if k.startswith(date_prefix) and not k.endswith("wibQuery")}
+        grid = date_prefix + "grdQuery"
+        cur = resp2
+        page_rows = all_rows
+        for page in range(2, 40):   # backstop：至多 ~40 頁
+            # Apply-query rows are rendered newest-first. Once a whole page is older than the
+            # lower bound, later pages cannot contribute a match. Sign-query ordering is less
+            # predictable, so it deliberately scans until the pager ends/backstop.
+            page_dates = [_uof_row_date(r, query_mode) for r in page_rows]
+            if (query_mode == "apply" and page_dates and all(
+                    d is not None and d < df_date for d in page_dates)):
+                break
+            h = _parse_hidden_fields(self._parse(cur))
+            h.update(cond)                         # pager postback 必須重帶條件欄位，否則伺服器用預設重繫結
+            h.pop(date_prefix + "wibQuery", None)  # 翻頁不按查詢鈕
+            h["__EVENTTARGET"] = grid
+            h["__EVENTARGUMENT"] = f"Page${page}"
+            cur = self.post(_FORM_QUERY_PATH, h)
+            if "Login.aspx" in str(cur.url) or "ErrorReport" in str(cur.url):
+                break
+            page_rows = [r for r in _parse_rows(self._parse(cur))
+                         if r["task_id"] and r["task_id"] not in seen]
+            if not page_rows:
+                break
+            seen.update(r["task_id"] for r in page_rows)
+            all_rows.extend(page_rows)
+
+        matched = [r for r in all_rows if _in_range(r)]
         if kw:
-            matched = [r for r in all_rows if kw in (
+            matched = [r for r in matched if kw in (
                 f"{r['form_number']} {r['form_name']} {r['subject']} {r['applicant']}").lower()]
-        else:
-            matched = all_rows
         rows = matched[:max_results]
         return {
             "ok": True,
@@ -3690,7 +3725,7 @@ class HttpWebBackend(OpsBackend):
             return f"❌ 查詢失敗：{result.get('reason', '(unknown)')}"
         rows = result["rows"]
         q = result["query"]
-        # keyword 時 total_matched＝過濾後命中數；無 keyword 時沿用掃到的列數
+        # total_matched 已套用日期邊界與 keyword；不是抓取列數或頁面大小。
         total = result.get("total_matched", result.get("total_scanned", len(rows)))
         header = (
             f"🔍 查詢表單 —"
