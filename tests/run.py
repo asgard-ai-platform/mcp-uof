@@ -22,6 +22,7 @@ SKIP_CODE = 77
 
 TIERS = {
     "smoke": ["smoke/test_imports.py", "smoke/test_binding.py", "smoke/test_http_web_regressions.py",
+              "smoke/test_plugin_detail_rows.py",
               "smoke/test_session_store.py", "smoke/test_browser_login.py",
               "smoke/test_auth_flow.py"],
     "mounted": ["mounted/test_mcp_stdio.py"],

@@ -220,6 +220,10 @@ def uof_custom_get_dialog_structure(
     只做結構擷取，不解讀語意：同一個標籤下可能有多個控制項（含隱藏輔助欄），
     要填哪一個、對應什麼業務概念，由部署端私有 skill 判斷。
 
+    含明細列編輯器：若某 dialog 欄位擁有明細列（費用/發票/料號明細），會一併列出「── 明細列編輯器 ──」
+    區段：開列鈕（用於 apply_form `_rows` 的 key）、每個列內控制項、下拉可選值（值=顯示）、以及列內
+    查找型欄位對應的巢狀 picker（標「picker: …」者，可用 search_dialog_options 以該控制項名查候選）。
+
     回傳的按鈕名可直接用在 apply_form 的 _lookups / _press_after / _rows。
     注意：必填不一定看得見——有的欄位沒有任何可操作的控制項，卻會在送出時被伺服器擋下。"""
     return get_backend().get_dialog_structure(form_version_id, field_code)
@@ -229,11 +233,11 @@ def uof_custom_get_dialog_structure(
 @require_auth
 def uof_custom_search_dialog_options(
     form_version_id: Annotated[str, Field(description="表單版本代號 formVersionId")],
-    field_code: Annotated[str, Field(description="對話框欄位代碼，由 get_dialog_structure 取得（如 MAINFORM、主要欄位）")],
+    field_code: Annotated[str, Field(description="對話框欄位代碼：區塊級（如 MAINFORM、主要欄位），或明細列內查找型欄位的控制項名（由 get_dialog_structure 的『明細列編輯器』區段取得，如料號/科目欄）")],
     keyword: Annotated[str, Field(description="查詢關鍵字（供應商名/料號/人名/採購單號等）")] = "",
     limit: Annotated[int, Field(description="最多回幾筆候選，預設 20")] = 20,
 ) -> str:
-    """查直接 picker dialog 的候選項目；不自動深入 row-editor 內的巢狀 picker。
+    """查 picker dialog 的候選項目：可查區塊級 picker，也可查明細列編輯器內的巢狀 picker（給列內控制項名）。
 
     何時使用：要填一個需要挑選的欄位，但手上只有名稱或部分關鍵字時。
     這是「不要捏造代碼」的正解——先查出真實候選，再挑其中一筆。
@@ -241,6 +245,9 @@ def uof_custom_search_dialog_options(
     回傳原始候選資料，不替你決定選哪筆：代碼要精確相符或名稱可信才算數，
     查無結果時應回問使用者，不可自行編一個值。整筆回傳的 JSON 就是 apply_form
     `_lookups` 的 `row` 所需的內容，請原樣帶入、不要只取代碼。
+
+    巢狀 picker（料號/科目/部門）：field_code 給 get_dialog_structure『明細列編輯器』區段中標「picker: …」
+    那個控制項的名稱，本工具會沿 DOM 追到該巢狀 picker 查候選。
 
     候選清單可能含哨兵列或缺少必要關聯欄位，不可盲取第一筆；選取後仍需回讀確認。"""
     return get_backend().search_dialog_options(form_version_id, field_code, keyword, limit)
