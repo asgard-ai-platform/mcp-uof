@@ -42,8 +42,12 @@ htmlcov/
 # Credentials
 .uof/
 
-# Deployment-specific agent instructions
+# Deployment-specific agent instructions（含部署端業務 SOP，不得進公開 repo）
 /skills/
+skills*.zip
+
+# 開發期規劃草稿（非交付文件）
+/plan.md
 
 # 測試產物（含真實單號/TaskId，機敏，不入公開 repo）
 e2e_results.json

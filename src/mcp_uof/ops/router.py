@@ -8,6 +8,8 @@ from .base import OpsBackend
 # 工具登記表；目前 OpsRouter 的所有操作都委派給 http_web。
 BINDING = {
     "check_auth": "http_web",
+    "login": "http_web",
+    "logout": "http_web",
     "get_form_list": "http_web",
     "get_external_form_list": "http_web",
     "get_form_structure": "http_web",
@@ -60,8 +62,16 @@ class OpsRouter(OpsBackend):
 
     # ── 對外操作 ────────────────────────────────────────────────────
     def check_auth(self) -> str:
-        """就緒檢查：回報網頁 session 認證狀態（一個程序 = 一個 UOF_ACCOUNT）。"""
+        """就緒檢查：回報網頁 session 認證狀態（一個程序 = 一個身份）。"""
         return self._route("check_auth")
+
+    def login(self, force: bool = False) -> str:
+        """開瀏覽器讓使用者登入 UOF，取得 session。"""
+        return self._route("login", force)
+
+    def logout(self) -> str:
+        """清除記憶體與磁碟上的 session。"""
+        return self._route("logout")
 
     def get_form_list(self) -> str:
         return self._route("get_form_list")

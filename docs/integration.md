@@ -15,13 +15,15 @@ uv sync
 uv run mcp-uof
 ```
 
-你需要備齊這 3 個值（向 UOF 管理員索取，或見 [configuration.md](configuration.md)）：
+你只需要備齊 1 個值（向 UOF 管理員索取，或見 [configuration.md](configuration.md)）：
 
-| 值 | 說明 |
-| --- | --- |
-| `UOF_BASE_URL` | UOF 站台 URL，含虛擬路徑、不含尾斜線。例：`https://your-uof-host.example.com/UOF` |
-| `UOF_ACCOUNT` | **這個 MCP 要代表哪個人**的 UOF 帳號 |
-| `UOF_PASSWORD` | 該帳號密碼 |
+| 值 | 必填 | 說明 |
+| --- | :-: | --- |
+| `UOF_BASE_URL` | ✅ | UOF 站台 URL，含虛擬路徑、不含尾斜線。例：`https://your-uof-host.example.com/UOF` |
+| `UOF_ACCOUNT` / `UOF_PASSWORD` | — | 只有無人值守（CI、自動化）才需要；一般使用改用瀏覽器登入 |
+
+**身份不是在設定檔綁的**：綁好之後在對話中呼叫 `uof_custom_login`，會在你的瀏覽器開啟真實的 UOF
+登入頁，登入完成後 session 自動交回 MCP 並存起來（位置可用 `UOF_SESSION_DIR` 指定，預設 `~/.uof`），重啟免重登。密碼由本機代理原樣轉送、不解析不落地，也不會回傳給 AI。
 
 > 取得 `/absolute/path/to/mcp-uof` 絕對路徑：在 repo 目錄執行 `pwd`。
 
@@ -33,18 +35,26 @@ uv run mcp-uof
 
 對綁定的實際影響：
 
-- 只需填 `UOF_BASE_URL` / `UOF_ACCOUNT` / `UOF_PASSWORD` 三個值。
-- 認證只有一種：以帳密登入 `Login.aspx` 取得 cookie session；沒有 PublicAPI 的站台也能用。
+- 設定檔只需填 `UOF_BASE_URL`。
+- 認證機制只有一種：`Login.aspx` 的 cookie session；沒有 PublicAPI 的站台也能用。
+  取得那個 session 的方式有兩種——**瀏覽器登入**（預設）或**帳密自動登入**（備援，需填帳密）。
+- 登入那一次會用到你自己的瀏覽器；操作 UOF 本身不需要瀏覽器 runtime。無圖形介面的機器請用帳密備援。
 
 ---
 
 ## 1. 身份模型（先讀，否則會誤解）
 
-UOF 一代沒有「代表個別使用者的 OAuth」；所有機制都是**單一系統身份**。所以綁定時必須想清楚：
+UOF 一代沒有「代表個別使用者的 OAuth」，一個 server process 只能是一個身份。要切換身份，看你用哪種登入方式：
 
-> **一份 server 設定 = 一個 UOF 帳號身份。** 你在 `env` 區塊填的 `UOF_ACCOUNT` 就是這個 MCP 之後所有操作的「人」。要以另一個人身份操作，就再加一份設定。
+> **一個 server process = 一個身份。**
 
-這也是為什麼**設定裡一定看得到要填的帳密**——身份就是在這裡綁的。切換 context 不是在對話中切換，而是切換你呼叫的 server。
+| 登入方式 | 身份是誰 | 怎麼換人 |
+| --- | --- | --- |
+| 瀏覽器登入（預設） | **實際在瀏覽器登入的那個人** | `uof_custom_logout` 後重新 `uof_custom_login`，或 `uof_custom_login(force=True)` |
+| 帳密自動登入（備援） | `env` 區塊的 `UOF_ACCOUNT` | 再加一份帶不同帳號的 server 設定，切換你呼叫的 server |
+
+瀏覽器登入下切換身份可以在對話中完成；帳密備援下則是切換你呼叫的 server entry。
+兩種方式都可以用 `check_auth` 隨時確認「目前這個工具是誰」。
 
 ---
 
@@ -61,7 +71,7 @@ UOF 一代沒有「代表個別使用者的 OAuth」；所有機制都是**單�
 
 ### 2.2 填入設定
 
-參考 [examples/claude_desktop_config.json](../examples/claude_desktop_config.json)，把 `mcpServers` 區段填入（路徑與帳密換成你的）：
+參考 [examples/claude_desktop_config.json](../examples/claude_desktop_config.json)，把 `mcpServers` 區段填入（路徑換成你的）：
 
 ```json
 {
@@ -70,20 +80,20 @@ UOF 一代沒有「代表個別使用者的 OAuth」；所有機制都是**單�
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "<applicant_account>",
-        "UOF_PASSWORD": "your_password"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }
 }
 ```
 
+> 不需要在這裡填帳密——身份由稍後的瀏覽器登入決定。
+
 ### 2.3 重啟與驗證
 
 1. **完全結束** Claude Desktop（不是關視窗，是 Quit）再開啟
 2. 在對話框看到工具圖示（🔨）出現 `uof` 的工具
-3. 呼叫 `check_auth`；首次建立 session 時會嘗試登入並回報狀態
+3. 呼叫 `uof_custom_login` 在瀏覽器完成登入，再用 `check_auth` 確認狀態
 
 ---
 
@@ -97,42 +107,38 @@ VS Code（含 GitHub Copilot Chat 的 Agent 模式）支援 MCP。
 
 ```json
 {
-  "inputs": [
-    {
-      "id": "uof_password",
-      "type": "promptString",
-      "description": "UOF 登入密碼",
-      "password": true
-    }
-  ],
   "servers": {
     "uof": {
       "type": "stdio",
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "<applicant_account>",
-        "UOF_PASSWORD": "${input:uof_password}"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }
 }
 ```
 
-> `${input:uof_password}` 會在啟動 server 時跳出密碼輸入框，避免密碼明文存在設定檔。正式環境請優先使用 MCP Host 提供的安全輸入或秘密管理方式。
+> 設定檔裡沒有密碼——身份由稍後的瀏覽器登入決定。若因無人值守而必須使用帳密備援，請改用 VS Code 的
+> `inputs` + `${input:uof_password}` 讓密碼在啟動時輸入，不要明文寫進設定檔。
 
 ### 3.2 啟動與驗證
 
 1. 開啟 `.vscode/mcp.json`，在 `"uof"` 上方會出現 **Start** 行內按鈕，點它啟動（或開命令面板 → `MCP: List Servers` → 啟動）
 2. 開 Chat → 切到 **Agent** 模式 → 工具面板應出現 `uof` 的工具
-3. 呼叫 `check_auth`，確認首次登入與目前 session 狀態
+3. 呼叫 `uof_custom_login` 在瀏覽器完成登入，再用 `check_auth` 確認狀態
 
 ---
 
 ## 4. Context 切換：以不同人員身份操作
 
-實務情境（如測試）常需要「申請人起單、主管簽核」分別由不同帳號執行。做法是**為每個人各建一份 server 設定**：
+實務情境（如測試）常需要「申請人起單、主管簽核」分別由不同帳號執行。有兩種做法：
+
+**做法 A：同一個 server 換人登入**（互動情境建議）——呼叫 `uof_custom_logout` 後重新
+`uof_custom_login`，在瀏覽器換一個人登入即可。缺點是同一時間只能是一個身份。
+
+**做法 B：為每個人各建一份帶帳密的 server 設定**（無人值守／需要同時具備兩種身份時）：
 
 ```json
 {
@@ -160,7 +166,7 @@ VS Code（含 GitHub Copilot Chat 的 Agent 模式）支援 MCP。
 ```
 
 - 兩份設定可**同時啟用**，工具名稱相同但分屬不同 server。對話時指明「用 uof-manager 的工具…」即以主管身份操作。
-- 每個 server process 在記憶體中持有自己的 session cookie；程序重啟後會重新登入。
+- 每個 server process 各自持有 session cookie，並依身份分別存到 session 目錄；程序重啟後直接沿用，失效才重登。
 - 隨時用 `check_auth` 確認「目前這個工具是誰」。
 
 > 每個 server entry 的可見資料與操作權限，仍由該 `UOF_ACCOUNT` 在 UOF 中的權限決定。
@@ -172,6 +178,8 @@ VS Code（含 GitHub Copilot Chat 的 Agent 模式）支援 MCP。
 | 症狀 | 可能原因與處置 |
 | --- | --- |
 | 工具沒出現 | 設定檔 JSON 格式錯誤；`uv`/絕對路徑不對；未完全重啟 |
-| `check_auth` 回認證失敗 | 3 個 env 任一缺漏或錯誤；帳號密碼錯誤導致 Login.aspx 登入失敗 |
-| 切了帳號卻還是舊身份 | 確認你呼叫的是正確的 server entry，並重新啟動該 server process |
+| `check_auth` 回 🔑 尚未登入 | 正常狀態，呼叫 `uof_custom_login` 在瀏覽器完成登入即可 |
+| `check_auth` 回 🔒 認證失敗 | `UOF_BASE_URL` 缺漏或錯誤；或有設帳密備援但帳密錯誤導致 Login.aspx 登入失敗 |
+| 瀏覽器沒有自動打開 | 工具回傳訊息裡會附上本機登入網址，手動複製到瀏覽器開啟即可 |
+| 切了帳號卻還是舊身份 | 瀏覽器登入：先 `uof_custom_logout` 再重登（舊 session 存檔會被清掉）。帳密備援：確認呼叫的是正確的 server entry 並重啟該 process |
 | `command not found: uv` | 未安裝 uv，或 GUI 程式的 PATH 找不到；改用 `uv` 的絕對路徑 |

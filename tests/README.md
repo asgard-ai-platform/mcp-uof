@@ -24,6 +24,9 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 
 - `smoke/test_imports.py`：自動探索並 import `src/mcp_uof` 下所有模組（語法 / 相依 / 循環匯入）。自動探索可避免手動清單漂移。
 - `smoke/test_binding.py`：檢查工具登記、router 委派與認證閘行為。
+- `smoke/test_session_store.py`：session 存檔的 round-trip、檔案權限、身份隔離、過期處理、`UOF_SESSION_DIR` 覆寫。
+- `smoke/test_browser_login.py`：對假 UOF upstream 驗證登入代理的安全邊界（token/Host 檢查、上游 `Set-Cookie` 不外流）、網址改寫與登入成功偵測。
+- `smoke/test_auth_flow.py`：三段認證優先序、`check_auth`/`logout` 文案分流，以及 `uof_custom_login` 全程整合（假瀏覽器，不會開視窗）。
 
 > 依專案取捨，離線層刻意精簡：不為每個解析分支寫細緻 mock；重點放在 Tier 2。
 
@@ -35,9 +38,15 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 - **身份綁定**：一個子程序 = 一個身份；身份**只**由注入的 `env`（`UOF_ACCOUNT` + 站台/密碼 + `PYTHONPATH`）決定，對應 `mcp.json` 的 `env` 區塊。SDK 對子程序只繼承白名單環境變數，故 `UOF_*` 必須明確帶入。
 - **協定序列**：`initialize()` →（SDK 自動送 `notifications/initialized`，不可重送）→ `list_tools()` → `call_tool()`。
 - **斷言**（`mounted/test_mcp_stdio.py`）：
-  1. 註冊護欄：`list_tools` 剛好回傳 17 個 `uof_custom_*`，且 `query_forms` 可直接查詢。
+  1. 註冊護欄：`list_tools` 剛好回傳 `EXPECTED_TOOLS` 那組 `uof_custom_*`，且 `query_forms` 可直接查詢。
   2. 多身份工作流程全程：申請、簽核、撤回、清理與已結案防護；實際能力依測試帳號權限而定。
   3. 負向認證：壞密碼 → `check_auth` / require_auth 工具回固定 🔒 字串，而非 crash / isError。
+  4. 登入態管理：已登入時 `login` 直接回報不開瀏覽器；`logout` 後帳密備援會自動重登。
+- **HOME 隔離（必要，勿移除）**：mounted 把 `HOME` 指到暫存目錄，避免 session 存檔污染開發者本機；
+  **負向認證那段另用全新的 HOME**，否則會沿用前面同帳號存下的*有效* session，壞密碼走不到登入流程，
+  那段測試就失效了。
+- **瀏覽器登入不在 mounted 覆蓋範圍**：需要真人操作。代理行為由 `smoke/test_browser_login.py` 對假
+  upstream 驗證，真實登入頁的渲染只能人工確認。
 - **前提**：stdio 下 server **不得寫任何東西到 stdout**（會污染 JSON-RPC）。src 的診斷訊息一律走 stderr（`_eprint`）。
 
 ---

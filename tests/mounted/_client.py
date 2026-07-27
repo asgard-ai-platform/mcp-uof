@@ -13,6 +13,8 @@ from mcp import ClientSession
 # Public tool names used by the registration guard.
 EXPECTED_TOOLS = {
     "uof_custom_check_auth",
+    "uof_custom_login",
+    "uof_custom_logout",
     "uof_custom_get_form_list",
     "uof_custom_get_external_form_list",
     "uof_custom_get_form_structure",

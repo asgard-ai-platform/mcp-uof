@@ -1,17 +1,19 @@
-"""Login.aspx cookie-session authentication for one UOF account per process."""
+"""UOF web session authentication: browser login, stored session, or env credentials."""
 
 from .base import (
-    AuthMode,
     AuthProvider,
-    get_provider,
+    BrowserLoginRequired,
+    auth_failure_message,
+    browser_login_required_message,
     get_session_provider,
     require_auth,
 )
 
 __all__ = [
-    "AuthMode",
     "AuthProvider",
-    "get_provider",
+    "BrowserLoginRequired",
+    "auth_failure_message",
+    "browser_login_required_message",
     "get_session_provider",
     "require_auth",
 ]

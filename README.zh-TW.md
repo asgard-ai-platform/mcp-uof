@@ -15,12 +15,13 @@
 其他特點：
 
 - **不需瀏覽器 runtime**：全部以 httpx + lxml 實作；在 musl/Alpine 環境部署時，仍需確認相依套件有 binary wheel 或備妥原生建置工具。
-- **單一身份模型**：一個 Server 程序代表一位 UOF 使用者，身份在設定時綁定（見[身份模型](#身份模型)）。
-- **認證**：以帳密登入 `Login.aspx` 取得 cookie session；登入失敗回固定的設定檢查提示。
+- **瀏覽器登入**：呼叫 `uof_custom_login`，會在使用者自己的瀏覽器開啟**真實的 UOF 登入頁**，登入後 session 自動交回 MCP。密碼由本機代理原樣轉送給 UOF，不解析、不記錄、不落地，也不會回傳給 AI，更不必寫進設定檔；session 存到 `UOF_SESSION_DIR`（預設 `~/.uof`），重啟免重登。無人值守情境（CI）仍可用帳密自動登入備援。
+- **單一身份模型**：一個 Server 程序代表一位 UOF 使用者（見[身份模型](#身份模型)）。
+- **認證失敗訊息分流**：「尚未登入」會要求 AI 去開登入頁；「設定錯誤」才要使用者檢查設定。
 
 ### 起單能力範圍
 
-起單由同一個 `apply_form` 完成，支援通用欄位型別（文字、自動編號、可空欄位、日期、單選/下拉、通用 dataGrid 明細）。實際申請身份固定為 `UOF_ACCOUNT`；目前工具簽名中的 `applicant_account` 與 `first_signer_account` 尚未改變身份或派單路徑，需要指定首站簽核者時請使用 UOF Web UI。本 repo 不內建特定表單的業務 SOP，欄位組合與檢查應由部署端的私有 skill 依表單結構與業務規則決定。
+起單由同一個 `apply_form` 完成，支援通用欄位型別（文字、自動編號、可空欄位、日期、單選/下拉、通用 dataGrid 明細）。實際申請身份固定為本 Server 目前登入的身份；目前工具簽名中的 `applicant_account` 與 `first_signer_account` 尚未改變身份或派單路徑，需要指定首站簽核者時請使用 UOF Web UI。本 repo 不內建特定表單的業務 SOP，欄位組合與檢查應由部署端的私有 skill 依表單結構與業務規則決定。
 
 > 重要：一般網頁起單可填的欄位以 `get_form_structure_by_id` 回傳者為準；若某欄位漏掉，應先視為解析器待修問題。通用 dataGrid 明細已支援，附件上傳、多站/並簽會簽尚未支援。
 
@@ -28,10 +29,12 @@
 
 ```bash
 uv sync
-cp .env.example .env   # 填入 UOF_BASE_URL、UOF_ACCOUNT、UOF_PASSWORD
+cp .env.example .env   # 至少填入 UOF_BASE_URL（帳密非必填）
 
 uv run mcp-uof         # 以 stdio 啟動 MCP Server
 ```
+
+啟動後在對話中呼叫 `uof_custom_login`，於瀏覽器完成登入即可開始操作。
 
 設定細節見 [docs/configuration.md](docs/configuration.md)。
 
@@ -46,9 +49,7 @@ uv run mcp-uof         # 以 stdio 啟動 MCP Server
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "your_account",
-        "UOF_PASSWORD": "your_password"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }
@@ -59,15 +60,20 @@ uv run mcp-uof         # 以 stdio 啟動 MCP Server
 
 ### 身份模型
 
-UOF 一代以帳密登入，沒有代表個別使用者的 OAuth。因此 `env` 區塊中的 `UOF_ACCOUNT` 就是這份設定的操作身份——這個 Server 的所有工具呼叫都以該帳號送出。要以另一個人的身份操作，請新增一份帶不同帳號的server entry；切換身份就是切換設定。完整說明見 [docs/integration.md](docs/integration.md)。
+一個 Server 程序 = 一個身份，該 Server 的所有工具呼叫都以這個身份送出。
 
-## MCP Tools 總覽（17 個）
+- **瀏覽器登入**（預設）：身份就是**實際在瀏覽器登入的那個人**。要換人操作，呼叫 `uof_custom_logout` 後重新登入，或 `uof_custom_login(force=True)`。
+- **帳密備援**：身份由 `env` 區塊的 `UOF_ACCOUNT` 綁定；換人就是換一份 server entry。
+
+完整說明見 [docs/integration.md](docs/integration.md)。
+
+## MCP Tools 總覽（19 個）
 
 所有 Tool 名稱使用 `uof_custom_` 前綴。
 
 | Domain | Tools |
 | --- | --- |
-| System | `check_auth` |
+| System | `check_auth`, `login`, `logout` |
 | WKF 電子簽核 | `get_form_list`, `get_external_form_list`, `query_forms`, `get_pending_sign_list`, `search_users`, `get_form_structure`, `get_form_structure_by_id`, `get_dialog_structure`, `search_dialog_options`, `operate_dialog`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `sign_next`, `terminate_task` |
 
 **完整工具規格、人員角色模型、使用情境與能力邊界，請見 [docs/tools.md](docs/tools.md)（導入前必讀）。**
