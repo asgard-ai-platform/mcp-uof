@@ -13,6 +13,7 @@ from mcp_uof.ops.http_web import (  # noqa: E402
     _FORM_CACHE_TTL_SECONDS,
     _map_row_to_columns,
     _mark_filled,
+    _resolve_checkbox_value,
 )
 
 
@@ -89,6 +90,23 @@ def main() -> int:
         "明細列欄名可映射到欄位 index",
         mapped == {0: "筆", 1: 2} and unmatched == [],
         f"mapped={mapped}, unmatched={unmatched}",
+    )
+
+    checked, posted, err = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], "否"
+    )
+    unchecked, _, false_err = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], False
+    )
+    _, _, bad_checkbox = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], "不轉"
+    )
+    failures += _common.check(
+        "checkbox 合法選項「否」優先於布林 false 語意且未知字串會擋下",
+        checked and posted == "否" and err is None
+        and not unchecked and false_err is None
+        and bad_checkbox is not None,
+        f"checked={checked}, posted={posted}, err={err}, bad={bad_checkbox}",
     )
 
     print("=" * 50)

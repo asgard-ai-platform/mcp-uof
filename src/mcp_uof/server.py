@@ -149,6 +149,7 @@ def uof_custom_apply_form(
             "  _press_after [按鈕名] — 一般欄位後、lookup 前按（如 btnCalc 計算金額）\n"
             "  _press_last  [按鈕名] — lookup 後、確認前按（供依賴挑選結果的按鈕）\n"
             "  _rows        明細列清單；區塊有兩個明細表格時改用 {開窗按鈕名: [列...]}\n"
+            "checkbox 請傳結構工具列出的確切 option value/label 來勾選；布林 false 代表不勾選。\n"
             "例：{\"主要欄位\": {\"_lookups\": [{\"press\": \"btnVendor\", \"row\": {...}}], "
             "\"txtSubject\": \"標題\", \"_rows\": [{\"txtQty\": 2}]}}"
         )),

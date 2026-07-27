@@ -2287,17 +2287,17 @@ class HttpSession:
                     _mark_filled(filled, code, fb, payload[iname])
 
             elif itype == "checkbox":
-                # An ASP.NET CheckBox posts its name only when ticked; the value is irrelevant.
-                # Assigning str(value) therefore *ticked* the box whatever was passed — including
-                # 「否」/False — and there was no way to express unticked at all.
                 opts = fb.get("options") or []
-                on = str(value).strip().lower() not in (
-                    "", "false", "0", "no", "n", "否", "未", "unchecked")
+                on, post_value, checkbox_error = _resolve_checkbox_value(opts, value)
+                if checkbox_error:
+                    blocking.append(f"欄位「{fb.get('label') or code}」的{checkbox_error}")
+                    bad_option_codes.add(fb.get("code") or "")
+                    continue
                 if on:
-                    payload[iname] = (opts[0]["value"] if opts else "on")
+                    payload[iname] = post_value
                 else:
                     payload.pop(iname, None)
-                _mark_filled(filled, code, fb, "已勾選" if on else "未勾選")
+                _mark_filled(filled, code, fb, post_value if on else "未勾選")
 
             elif itype == "dialog" or isinstance(value, (dict, list, tuple)):
                 # A structured value addresses a plugin block even when the block was inferred as
