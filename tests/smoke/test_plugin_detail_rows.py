@@ -43,6 +43,8 @@ def _dialog_html(*, name: str = "", calculated: str = "", picked: str = "") -> s
             id="ctl00_ContentPlaceHolder1_btnCalc" value="計算">
           <input type="submit" name="ctl00$ContentPlaceHolder1$btnLookup"
             id="ctl00_ContentPlaceHolder1_btnLookup" value="挑選">
+          <input type="submit" name="ctl00$ContentPlaceHolder1$btnAfterLookup"
+            id="ctl00_ContentPlaceHolder1_btnAfterLookup" value="查詢帶入值">
         </td>
       </tr></table>
     </form></body></html>
@@ -61,6 +63,14 @@ def _sequence_session():
 
     def post(_path, payload, retry_on_login=False):
         payloads.append(dict(payload))
+        if any(k.endswith("$btnAfterLookup") for k in payload):
+            order.append("after_lookup")
+            current["html"] = _dialog_html(
+                name=payload["ctl00$ContentPlaceHolder1$txtName"],
+                calculated="after:" + payload["ctl00$ContentPlaceHolder1$txtPicked"],
+                picked=payload["ctl00$ContentPlaceHolder1$txtPicked"],
+            )
+            return _Resp(current["html"])
         if any(k.endswith("$btnCalc") for k in payload):
             order.append("calculate")
             current["html"] = _dialog_html(name=payload["ctl00$ContentPlaceHolder1$txtName"],
@@ -261,6 +271,42 @@ def main() -> int:
         f"missing={missing}, present={present}",
     )
 
+    row_required_html = """
+    <table><tr><td>＊必填數值</td><td>
+      <input type="text" name="ctl00$ContentPlaceHolder1$txtRequiredValue"
+        id="ctl00_ContentPlaceHolder1_txtRequiredValue" value="">
+      <input type="text" name="ctl00$ContentPlaceHolder1$txtInternalHelper"
+        id="ctl00_ContentPlaceHolder1_txtInternalHelper" class="HideMe" value="">
+    </td></tr>
+    <tr><td>備註</td><td>
+      <input type="text" name="ctl00$ContentPlaceHolder1$txtMemo"
+        id="ctl00_ContentPlaceHolder1_txtMemo" value="">
+    </td></tr></table>
+    """
+    required_row_session = HttpSession.__new__(HttpSession)
+    required_row_session._vpath = "/UOF"
+    required_row_session.get = lambda _path: _Resp(row_required_html)
+    required_row_posts = []
+    required_row_session.post = lambda path, payload, retry_on_login=False: (
+        required_row_posts.append(dict(payload)) or _Resp(
+            '<meta id="TempReturnValue" content="{&quot;ok&quot;:true}">'
+        )
+    )
+    missing_rows = required_row_session.add_plugin_dialog_rows(
+        "/UOF/RowDialog.aspx?GridDataID=required",
+        [{"txtMemo": "缺 key"}, {"txtMemo": "空字串", "txtRequiredValue": ""}],
+    )
+    failures += _common.check(
+        "row editor 列內必填缺 key 或空字串都擋下且不送確認",
+        not missing_rows["ok"]
+        and missing_rows["added"] == 0
+        and len(missing_rows["errors"]) == 2
+        and all("txtRequiredValue" in e for e in missing_rows["errors"])
+        and all("txtInternalHelper" not in e for e in missing_rows["errors"])
+        and required_row_posts == [],
+        f"result={missing_rows}, posts={required_row_posts}",
+    )
+
     session, order, payloads = _sequence_session()
     result = session.add_plugin_dialog_rows(
         "/UOF/RowDialog.aspx?GridDataID=1",
@@ -268,17 +314,18 @@ def main() -> int:
             "txtName": "測試品項",
             "_press_after": ["btnCalc"],
             "_lookups": [{"press": "btnLookup", "row": {"InternalId": "ITEM-7"}}],
+            "_press_last": ["btnAfterLookup"],
         }],
     )
     confirm_payload = payloads[-1]
     failures += _common.check(
-        "明細列 postback 順序為一般欄位→計算→lookup→確認",
-        result["ok"] and order == ["calculate", "lookup", "confirm"],
+        "明細列 postback 順序為一般欄位→計算→lookup→後置按鈕→確認",
+        result["ok"] and order == ["calculate", "lookup", "after_lookup", "confirm"],
         f"result={result}, order={order}",
     )
     failures += _common.check(
         "lookup 帶入值保留到最後確認 payload",
-        confirm_payload.get("ctl00$ContentPlaceHolder1$txtCalculated") == "42"
+        confirm_payload.get("ctl00$ContentPlaceHolder1$txtCalculated") == "after:ITEM-7"
         and confirm_payload.get("ctl00$ContentPlaceHolder1$txtPicked") == "ITEM-7",
         str(confirm_payload),
     )

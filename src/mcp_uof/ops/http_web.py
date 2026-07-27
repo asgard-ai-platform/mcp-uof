@@ -743,6 +743,37 @@ def _missing_required_controls(tree, uc_prefix: str, payload: dict) -> list:
     ]
 
 
+def _missing_required_dialog_fields(fields: list, payload: dict) -> list:
+    """Return required row-editor fields still empty immediately before confirm."""
+    return [
+        c for c in fields
+        if c.get("required") and not c.get("hidden")
+        and not str(payload.get(c["name"], "")).strip()
+    ]
+
+
+def _resolve_checkbox_value(options: list, value) -> tuple:
+    """Resolve one ASP.NET checkbox to (checked, posted_value, error).
+
+    A checkbox option labelled/value ``否`` is still a real selectable option: matching the
+    server-advertised option takes precedence over interpreting free-form false-like strings.
+    """
+    sv = str(value).strip()
+    hit = next((o for o in options if sv in (str(o["value"]), str(o["label"]))), None)
+    if hit is not None:
+        return True, str(hit["value"]), None
+    if isinstance(value, bool):
+        return value, (str(options[0]["value"]) if value and options else "on"), None
+    low = sv.lower()
+    if low in ("true", "1", "yes", "y", "是", "勾選", "checked"):
+        return True, (str(options[0]["value"]) if options else "on"), None
+    if low in ("", "false", "0", "no", "n", "否", "未", "unchecked"):
+        return False, "", None
+    allowed = "／".join(str(o["label"]) for o in options)
+    hint = f"，只能填：{allowed}、true 或 false" if allowed else "，只能填 true 或 false"
+    return False, "", f"值『{value}』不是有效 checkbox 選項{hint}"
+
+
 def _parse_filled_form_fields(tree) -> list:
     """Extract the filled-in field values of a rendered form (ViewForm / SignNodeForm).
 
@@ -1730,8 +1761,9 @@ class HttpSession:
                 return {"ok": False, "added": added, "controls": controls,
                         "errors": errors + ["redirected to Login.aspx"]}
             tree = self._parse(r)
+            row_fields = _parse_dialog_fields(r.text)
             if not controls:
-                controls = [c["name"] for c in _parse_dialog_fields(r.text)]
+                controls = [c["name"] for c in row_fields]
                 if not controls:
                     return {"ok": False, "added": added, "controls": controls,
                             "errors": errors + ["對話框欄位解析失敗，無法驗證列內容"]}
@@ -1746,6 +1778,7 @@ class HttpSession:
             # knowledge and comes from the caller.
             fields = dict(row)
             presses = fields.pop("_press_after", None) or []
+            presses_last = fields.pop("_press_last", None) or []
             # `_fill_before` values ride along with every lookup post. Ordering is the point: a
             # control that drives another (分類 drives 費用項目) must be submitted *with* the
             # lookup, so ASP.NET raises its changed-event first and the button click fills the
@@ -1766,10 +1799,11 @@ class HttpSession:
                 errors.append(f"第 {ri + 1} 列沒有任何值，未送出")
                 continue
             # Plain fields first (what `_press_after` computes from), THEN `_press_after` (計算
-            # etc.), THEN `_lookups` LAST, right before confirm. A calc button's postback
+            # etc.), THEN `_lookups`, and finally optional `_press_last`. A calc button's postback
             # re-renders the whole row from the server's own state and was observed to blank
-            # picker-derived read-only columns (帳號/內部 Id) set by an *earlier* lookup — so a
-            # lookup run after calc is the one whose values actually survive to the confirm.
+            # picker-derived read-only columns (帳號/內部 Id) set by an *earlier* lookup — so
+            # lookup must follow those calculations. `_press_last` is the explicit escape hatch
+            # for a button that instead consumes the lookup-populated values.
             payload = _form_state_payload(tree)
             bad_field = False
             for k, v in fields.items():
@@ -1807,6 +1841,27 @@ class HttpSession:
                 tree = self._parse(rl)
                 payload = _form_state_payload(tree)
             if bad_field:
+                continue
+            for press in presses_last:
+                cp = dict(payload)
+                _trigger(cp, tree, press)
+                rc = self.post(path, cp, retry_on_login=False)
+                if "Login.aspx" in str(rc.url):
+                    errors.append(f"第 {ri + 1} 列按下 {press} 時 session 已過期，請重試")
+                    bad_field = True
+                    break
+                tree = self._parse(rc)
+                payload = _form_state_payload(tree)
+            if bad_field:
+                continue
+            missing = _missing_required_dialog_fields(row_fields, payload)
+            if missing:
+                desc = "、".join(
+                    f"{c.get('label') or c.get('id') or c['name'].split('$')[-1]}"
+                    f"（{c.get('id') or c['name'].split('$')[-1]}）"
+                    for c in missing
+                )
+                errors.append(f"第 {ri + 1} 列的必填控制項未提供：{desc}，該列未送出")
                 continue
             payload["__EVENTTARGET"] = "ctl00$MasterPageRadButton1"
             payload["__EVENTARGUMENT"] = ""
@@ -2250,8 +2305,9 @@ class HttpSession:
                 dialog_url = fb.get("dialog_url") or ""
                 # A plugin block can carry its own controls and one or more row grids. A dict
                 # addresses the block itself:
-                # `_lookups` / `_press_after` / `_rows` are reserved, every other key is a control
-                # name inside the block. Which control means what is form knowledge — not MCP's.
+                # `_lookups` / `_press_after` / `_press_last` / `_rows` are reserved, every other
+                # key is a control name inside the block. Which control means what is form
+                # knowledge — not MCP's.
                 if isinstance(value, dict):
                     inline = dict(value)
                     rows_v = inline.pop("_rows", None)
@@ -2263,6 +2319,7 @@ class HttpSession:
                         tree2.xpath("//input[@name]|//select[@name]|//textarea[@name]"))
                         if n and (not ucp or _matches_uc_prefix(n, ucp))}
                     presses = inline.pop("_press_after", None) or []
+                    presses_last = inline.pop("_press_last", None) or []
                     # Controls consumed by a lookup must be posted with the button press, not after it.
                     prefill_i = inline.pop("_fill_before", None) or {}
                     bad_inline = False
@@ -2277,10 +2334,11 @@ class HttpSession:
                                         f"有效名稱：{'／'.join(sorted(names)[:20])}")
                         bad_inline = True
                     # Plain fields first (what `_press_after` computes from), THEN `_press_after`
-                    # (計算 etc.), THEN `_lookups` LAST — a calc button's postback re-renders the
+                    # (計算 etc.), THEN `_lookups`, and finally optional `_press_last`. A calc
+                    # button's postback re-renders the
                     # whole block from the server's own state and was observed to blank
-                    # picker-derived read-only columns set by an *earlier* lookup, so the lookup
-                    # has to be the last word before this block is done.
+                    # picker-derived read-only columns set by an *earlier* lookup, so lookup must
+                    # follow those calculations. `_press_last` is only for consumers of lookup.
                     if not bad_inline:
                         for k, v in inline.items():
                             err = _fill_control_value(payload, tree2, names[k], v)
@@ -2339,6 +2397,16 @@ class HttpSession:
                                 f"伺服器無法解析所選項目，請換一筆")
                             bad_inline = True
                             break
+                    for press in ([] if bad_inline else presses_last):
+                        pp = dict(payload)
+                        _trigger_control(pp, tree2, press)
+                        press_resp = self.post(first_site_path, pp, retry_on_login=False)
+                        if "Login.aspx" in str(press_resp.url):
+                            blocking.append(f"欄位「{label_}」按下 {press} 時 session 已過期，請重試")
+                            bad_inline = True
+                            break
+                        tree2 = self._parse(press_resp)
+                        payload.update(_form_state_payload(tree2))
                     # A dict addressing the block (e.g. to fill `_rows`) marks the whole block
                     # filled even when the block's OWN required controls (付款人 …) were never
                     # touched — the block has content, just not in the field the server checks.
