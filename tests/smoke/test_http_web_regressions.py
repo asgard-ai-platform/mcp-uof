@@ -13,6 +13,7 @@ from mcp_uof.ops.http_web import (  # noqa: E402
     _FORM_CACHE_TTL_SECONDS,
     _map_row_to_columns,
     _mark_filled,
+    _parse_filled_form_fields,
     _resolve_checkbox_value,
     _uof_row_date,
 )
@@ -104,6 +105,25 @@ def main() -> int:
         "明細列欄名可映射到欄位 index",
         mapped == {0: "筆", 1: 2} and unmatched == [],
         f"mapped={mapped}, unmatched={unmatched}",
+    )
+
+    rendered_grid = """
+    <table id="ctl00_tbFieldCollection"><tr><td>
+      <span class="TitleFont">合成複合欄位</span><span class="FieldHide">(BLOCK)</span>
+      <table id="ctl00_Grid1">
+        <tr><th>項次</th><th>任意額外欄</th></tr>
+        <tr><td>1</td><td>保留值</td></tr>
+      </table>
+    </td></tr></table>
+    """
+    parsed_grid = _parse_filled_form_fields(
+        HttpSession.__new__(HttpSession)._parse(_Resp("https://uof.example/View.aspx", rendered_grid))
+    )
+    failures += _common.check(
+        "get_task_data Grid parser 保留頁面渲染的任意額外欄位",
+        parsed_grid[0]["grid"][0]["rows"]
+        == [["項次", "任意額外欄"], ["1", "保留值"]],
+        str(parsed_grid),
     )
 
     checked, posted, err = _resolve_checkbox_value(
