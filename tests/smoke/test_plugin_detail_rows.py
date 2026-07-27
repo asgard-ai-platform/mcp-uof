@@ -1,8 +1,6 @@
 """Offline regression tests for PR #4 plugin detail-row behavior."""
 import json
-import os
 import sys
-from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -465,31 +463,6 @@ def main() -> int:
         and "＊料號" in structure_rendered
         and "picker: PickerA.aspx" in structure_rendered,
         structure_rendered,
-    )
-
-    old_fields = os.environ.get("UOF_TEST_WORKFLOW_FIELDS")
-    old_memo = os.environ.get("UOF_TEST_WORKFLOW_MEMO_FIELD")
-    try:
-        os.environ["UOF_TEST_WORKFLOW_FIELDS"] = '{"日期":"{today}","明細":[{"品名":"X"}]}'
-        os.environ["UOF_TEST_WORKFLOW_MEMO_FIELD"] = "備註"
-        mounted_fields = _common.workflow_fields("regression")
-    finally:
-        if old_fields is None:
-            os.environ.pop("UOF_TEST_WORKFLOW_FIELDS", None)
-        else:
-            os.environ["UOF_TEST_WORKFLOW_FIELDS"] = old_fields
-        if old_memo is None:
-            os.environ.pop("UOF_TEST_WORKFLOW_MEMO_FIELD", None)
-        else:
-            os.environ["UOF_TEST_WORKFLOW_MEMO_FIELD"] = old_memo
-    failures += _common.check(
-        "mounted payload 展開 {today} 並保留巢狀明細與情境標記",
-        mounted_fields == {
-            "日期": date.today().strftime("%Y/%m/%d"),
-            "明細": [{"品名": "X"}],
-            "備註": "regression",
-        },
-        str(mounted_fields),
     )
 
     print("=" * 50)

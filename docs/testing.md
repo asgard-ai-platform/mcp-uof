@@ -15,7 +15,7 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 | 層 | 路徑 | 是否需真實環境 | 涵蓋 |
 | --- | --- | --- | --- |
 | **Smoke** | `tests/smoke/` | 否（CI 可跑） | 模組可匯入、工具綁定、認證閘、session／瀏覽器登入，以及 plugin 明細解析、postback 順序、必填與錯誤訊息 |
-| **Mounted** | `tests/mounted/` | 是 | 真實掛載 MCP：工具註冊護欄 + 測試表單多身份全程 + 負向認證 + 登入態管理（深度保真） |
+| **Mounted** | `tests/mounted/` | 是 | 真實掛載 MCP：工具註冊護欄 + 單一身份認證 + 唯讀查詢 + 登入態管理 |
 
 > 瀏覽器登入需要真人操作，不在自動化覆蓋範圍：代理行為由 smoke 層對假 upstream 驗證，真實 UOF 登入頁的渲染需人工確認一次（`UOF_LOGIN_DEBUG=1` 可看逐筆代理請求）。
 > mounted 會把 `HOME` 指到暫存目錄以隔離 session 存檔（預設在 `~/.uof`）——負向認證段落尤其依賴這點。
@@ -26,14 +26,12 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 
 ## 測試紀律（真實層）
 
-- 只使用 `UOF_ACCOUNT_USER1~3` 指定的隔離測試帳號，共用 `UOF_PASSWORD`。
-- Mounted 以隔離測試表單跑多身份起單/核准/作廢；後台流程須將測試申請帳號送給測試簽核帳號。
-- 客製測試 schema 由 `.env` 的 `UOF_TEST_WORKFLOW_FIELDS` 與 `UOF_TEST_WORKFLOW_MEMO_FIELD` 注入，不得提交到 repo。
-- `formVersionId` 動態解析（不可寫死；`_common.resolve_form_httpx`）。
-- 所有起出的單在 `finally` 一律 `terminate_task(Cancel)`，不留簽核中表單。
-- 真實主機名只在未入庫的 `.env`；斷言用語意字串（簽核中 / 作廢 / 已結案），不硬編環境值。
+- 只使用 `.env` 的 `UOF_ACCOUNT` / `UOF_PASSWORD` 單一身份。
+- 只執行認證、工具註冊與唯讀查詢，不建立、簽核、撤回或結案表單。
+- 不依賴部署端表單名稱、欄位 schema 或流程角色。
+- 真實主機名與帳密只放在未入庫的 `.env`，斷言不硬編環境值。
 
-修改 WKF 程式後的完整回歸：`smoke` → `mounted`。
+修改後的公開 repo 回歸：`smoke` → `mounted`。部署端客製表單的寫入驗證由部署端測試工具負責。
 
 ## 能力與邊界
 
