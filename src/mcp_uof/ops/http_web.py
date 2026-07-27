@@ -31,13 +31,6 @@ _APPLY_FORM_LIST_PATH = "/WKF/FormUse/PersonalBox/ApplyFormList.aspx"
 _ADD_FORM_SCRIPT_PATH = "/WKF/FormUse/AddFormScript.aspx"
 _FORM_CACHE_TTL_SECONDS = 300.0
 
-# ASP.NET hidden inputs to ALWAYS carry but never treat as field values.
-_ASPNET_HIDDEN = frozenset([
-    "__VIEWSTATE", "__VIEWSTATEGENERATOR", "__VIEWSTATEENCRYPTED",
-    "__EVENTTARGET", "__EVENTARGUMENT", "__EVENTVALIDATION",
-    "hdflag", "hfIsAdAuth",
-])
-
 _SKIP_HIDDEN_PREFIXES = ("__VIEWSTATE", "__EVENT", "ClientState", "TSM", "TSSM")
 
 
@@ -1074,6 +1067,13 @@ class HttpSession:
         self._apply_form_list: Optional[dict] = None
         self._form_cache_at = 0.0
         self._login_lock = threading.Lock()
+        # 沿用上次登入存下的 cookie（若有），讓 process 重啟不必重登。
+        from ..auth import store as _store
+        meta = _store.load_session(self._client)
+        self.session_source: Optional[str] = (meta or {}).get("source")
+        # 目前 session 實際屬於哪個帳號。瀏覽器登入時由代理取得，帳密登入時就是 UOF_ACCOUNT。
+        # 身份顯示一律以它為準，不能直接拿 UOF_ACCOUNT 頂替——兩者可能是不同的人。
+        self.session_account: str = (meta or {}).get("account") or ""
 
     # ── Internal helpers ─────────────────────────────────────────────
 
@@ -1095,9 +1095,6 @@ class HttpSession:
         query_part = ("?" + parsed.query) if parsed.query else ""
         return path + query_part
 
-    def _page_html(self, resp: "_httpx.Response") -> str:
-        return resp.text
-
     def _parse(self, resp: "_httpx.Response"):
         """Parse response body with lxml and return tree."""
         return _html_fromstring(resp.text, base_url=str(resp.url))
@@ -1108,10 +1105,39 @@ class HttpSession:
     def _form_cache_valid(self) -> bool:
         return (time.monotonic() - self._form_cache_at) < _FORM_CACHE_TTL_SECONDS
 
+    def is_logged_in(self) -> bool:
+        """探測目前 cookie 是否仍是有效登入態；**不會**觸發任何登入。"""
+        try:
+            resp = self._client.get(
+                self._full_url(self._vpath + _HOMEPAGE_PATH), follow_redirects=False
+            )
+        except Exception as ex:
+            _eprint(f"[ops.http_web] 登入狀態探測失敗（{type(ex).__name__}: {ex}）")
+            return False
+        location = (resp.headers.get("location") or "").lower()
+        if "login.aspx" in location or "login.aspx" in str(resp.url).lower():
+            return False
+        return resp.status_code < 400
+
     def _do_login(self) -> None:
-        """GET Login.aspx, parse VIEWSTATE, POST credentials."""
+        """GET Login.aspx, parse VIEWSTATE, POST credentials.
+
+        沒有設定帳密時不是錯誤——那代表這個部署走瀏覽器登入，改拋 `BrowserLoginRequired`
+        讓工具層引導使用者呼叫 `uof_custom_login`。
+        """
+        from ..auth.base import BrowserLoginRequired
+
+        # 已經是瀏覽器登入的身份時，session 過期一律要求重新登入，**不能**改用環境變數帳密
+        # 自動登入：那會讓操作身份在程序中途從「實際登入的人」悄悄變成 UOF_ACCOUNT。
+        if self.session_source == "browser":
+            raise BrowserLoginRequired(
+                f"目前是瀏覽器登入的身份（{self.session_account or '未辨識'}），session 已失效。"
+                "為避免中途換成環境變數帳號，不會自動重登，請重新呼叫 uof_custom_login"
+            )
         account = os.environ.get("UOF_ACCOUNT", "")
         password = os.environ.get("UOF_PASSWORD", "")
+        if not (account and password):
+            raise BrowserLoginRequired("未設定 UOF_ACCOUNT / UOF_PASSWORD，且沒有可用的既有 session")
         login_url = self._full_url(self._vpath + _LOGIN_PATH)
         _eprint("[ops.http_web] logging in")
         resp = self._client.get(login_url)
@@ -1132,6 +1158,10 @@ class HttpSession:
                 f"Check UOF_ACCOUNT / UOF_PASSWORD."
             )
         _eprint("[ops.http_web] login succeeded")
+        self.session_source = "password"
+        self.session_account = account
+        from ..auth import store as _store
+        _store.save_session(self._client, account=account, source="password")
 
     def _relogin_if_still_expired(self) -> None:
         """Avoid duplicate concurrent logins: re-check session after taking the lock."""
@@ -1523,23 +1553,6 @@ class HttpSession:
             return {"ok": False, "reason": f"欄位 {field_code} 取不到查詢視窗位址", "field": f["label"], "rows": []}
         return {"ok": True, "reason": "", "field": f"{f['label']}({f['code']})",
                 "rows": self.list_dialog_options(full, keyword, limit)}
-
-    def _dialog_opener_name(self, tree, dialog_url: str) -> str:
-        """Name of the parent control that opens `dialog_url` (its `btnAdd`).
-
-        After the dialog confirms a row, the browser's callback returns true and the framework
-        posts the parent back through this control; the server then appends the pending row to
-        the grid. Skipping that postback leaves the row in limbo — the dialog reports success and
-        the form still comes out empty.
-        """
-        base = dialog_url.split("/")[-1].split("?")[0]
-        for el in tree.xpath("//input[@onclick] | //a[@onclick]"):
-            if base in html.unescape(el.get("onclick") or ""):
-                # submit inputs fire on their name=value pair; anything else via __EVENTTARGET
-                return (el.get("name") or "",
-                        el.get("value") or "",
-                        (el.get("type") or "").lower() == "submit")
-        return ("", "", False)
 
     def add_plugin_dialog_rows(self, dialog_full_url: str, rows: list) -> dict:
         """Persist rows through a plugin row-editor dialog (PRItemDialog, ExpEmpItemDialog, …).
@@ -2435,41 +2448,6 @@ class HttpSession:
         return _result(task_id, form_number, form_name=real_name,
                        reason="" if task_id else "已成單但未取得 TaskId（可用 query_forms 查）")
 
-    # ── CDS picker helpers ─────────────────────────────────────────────
-    def resolve_picker_entity(self, dialog_path: str, search_kw: str,
-                              code_field: str, code: str) -> Optional[dict]:
-        """Search a CDS picker dialog by keyword; return the result row's full entity JSON.
-
-        UOF CDS pickers (SupplierDialog / ItemDialog) render each result row with a
-        `jsonData` attribute holding the entity incl. its numeric `Id`. That JSON is
-        exactly what the parent form expects back as `DialogReturnValue` — so we read it
-        directly over httpx (no browser dialog needed). Returns the row matching `code`
-        on `code_field`, else the first row (when `code` is empty), else None.
-        """
-        import json as _json
-        tree = self._parse(self.get(dialog_path))
-        p = _form_state_payload(tree)
-        for kf in tree.xpath("//input[@type='text'][@name]"):
-            if "key" in (kf.get("name") or "").lower():
-                p[kf.get("name")] = search_kw
-        for bk in tree.xpath("//input[@type='submit'][@name]"):
-            if "搜尋" in (bk.get("value") or "") or (bk.get("name") or "").endswith("btnKey"):
-                p[bk.get("name")] = bk.get("value") or "搜尋"
-                break
-        p["__EVENTTARGET"] = ""
-        p["__EVENTARGUMENT"] = ""
-        t2 = _html_fromstring(self.post(dialog_path, p).text)
-        fallback = None
-        for el in t2.xpath("//*[@jsonData] | //*[@jsondata]"):
-            jd = _decode_json_attr(el.get("jsonData") or el.get("jsondata") or "")
-            if jd is None:
-                continue
-            if fallback is None:
-                fallback = jd
-            if code and str(jd.get(code_field) or "").lower() == str(code).lower():
-                return jd
-        return None if code else fallback
-
     # Form-specific application recipes intentionally live outside this public MCP package.
     # ── search_users ──────────────────────────────────────────────────
 
@@ -2746,7 +2724,17 @@ def get_http_session() -> HttpSession:
             try:
                 _session._ensure_logged_in()
             except Exception as ex:
-                _eprint(f"[ops.http_web] ⚠️ initial login failed: {ex}")
+                from ..auth.base import BrowserLoginRequired
+                if isinstance(ex, BrowserLoginRequired):
+                    # 走瀏覽器登入的部署，啟動時未登入是常態，不是錯誤。
+                    _eprint("[ops.http_web] 尚未登入，等待 uof_custom_login 開啟瀏覽器登入")
+                else:
+                    _eprint(f"[ops.http_web] ⚠️ initial login failed: {ex}")
+    return _session
+
+
+def current_http_session() -> "Optional[HttpSession]":
+    """回傳現有的 session 單例；不會建立新的、也不會觸發登入（peek）。"""
     return _session
 
 
@@ -2767,30 +2755,115 @@ class HttpWebBackend(OpsBackend):
         return get_http_session()
 
     # ── System ──────────────────────────────────────────────────────
+    def _identity_label(self, session: Optional["HttpSession"] = None) -> str:
+        """目前 session **實際**屬於誰。
+
+        一律以 session 自己記錄的帳號為準，不能退回 UOF_ACCOUNT——使用者可能透過瀏覽器登入
+        了另一個人，那時報 UOF_ACCOUNT 就是錯的身份。真的辨識不出來時就明說。
+        """
+        session = session or self._session
+        if session.session_account:
+            return session.session_account
+        return "（無法辨識登入者；登入頁的帳號欄位不是預期格式，可用 UOF_SESSION_NAMESPACE 區分身份）"
+
     def check_auth(self) -> str:
-        account = os.environ.get("UOF_ACCOUNT", "(未設定 UOF_ACCOUNT)")
         base = os.environ.get("UOF_BASE_URL", "(未設定 UOF_BASE_URL)")
         try:
-            resp = self._session._client.get(
-                self._session._full_url(self._session._vpath + _HOMEPAGE_PATH),
-                follow_redirects=False,
-            )
-            if resp.is_redirect and "Login.aspx" in (resp.headers.get("location") or ""):
-                return (
-                    f"⚠️ http_web session：帳號 {account} 未登入（重新導向到 Login.aspx）\n"
-                    f"   伺服器: {base}"
-                )
-            logged_in = "Login.aspx" not in str(resp.url)
+            session = self._session
+            logged_in = session.is_logged_in()
         except Exception as ex:
             return f"❌ http_web session 檢查失敗 ({type(ex).__name__}): {ex}"
+        from ..auth.session import has_password_credentials
         if logged_in:
+            source = {"browser": "瀏覽器登入", "password": "環境變數帳密自動登入"}.get(
+                session.session_source or "", "未知來源"
+            )
+            out = (
+                f"✅ http_web session：{self._identity_label(session)} 已登入\n"
+                f"   伺服器: {base}\n"
+                f"   認證來源: {source}"
+            )
+            configured = os.environ.get("UOF_ACCOUNT", "").strip()
+            if (configured and session.session_account
+                    and session.session_account.lower() != configured.lower()):
+                out += (
+                    f"\n\n⚠️ 注意：目前操作身份是 **{session.session_account}**，"
+                    f"與設定中的 UOF_ACCOUNT（{configured}）不同。\n"
+                    "所有操作都會以實際登入的身份送出。請據實告知使用者，不要以設定值稱呼對方。"
+                )
+            return out
+        if has_password_credentials() and session.session_source != "browser":
             return (
-                f"✅ http_web session：帳號 {account} 已登入\n"
-                f"   伺服器: {base}"
+                f"⚠️ http_web session：帳號 {os.environ.get('UOF_ACCOUNT', '')} 未登入"
+                f"（下次操作會自動以環境變數帳密登入）\n   伺服器: {base}"
             )
         return (
-            f"⚠️ http_web session：帳號 {account} 未登入\n"
-            f"   伺服器: {base}"
+            f"🔑 http_web session：尚未登入，需要使用者在瀏覽器完成登入。\n"
+            f"   伺服器: {base}\n\n"
+            "請呼叫 `uof_custom_login` 開啟登入頁，不要向使用者索取帳號密碼。"
+        )
+
+    def login(self, force: bool = False) -> str:
+        from ..auth import browser_login as _bl
+
+        session = self._session
+        if not force and session.is_logged_in():
+            return (
+                f"✅ 已經是登入狀態（{self._identity_label()}），不需要重新登入。\n"
+                "若要換身份或強制重登，請用 force=True。"
+            )
+        if force:
+            # 丟掉現有 cookie 再重來，否則瀏覽器會直接被既有 session 放行、換不了身份。
+            # 先以實際登入帳號刪檔，再清記憶體欄位；否則換身份時舊身份的存檔會殘留。
+            from ..auth import store as _store
+            old_account = session.session_account
+            _store.clear_session(account=old_account)
+            session._client.cookies.clear()
+            session.session_source = None
+            session.session_account = ""
+            _bl.shutdown_flow()
+
+        flow = _bl.start_login_flow(session, reuse=not force)
+        opened = _bl.open_in_browser(flow.url)
+        wait = _bl.wait_seconds()
+        if flow.wait(wait):
+            # 標成 browser 之後，session 過期不會再改用環境變數帳密自動登入（見 _do_login），
+            # 否則身份會在程序中途從實際登入的人悄悄變回 UOF_ACCOUNT。
+            session.session_source = "browser"
+            note = ""
+            configured = os.environ.get("UOF_ACCOUNT", "").strip()
+            if (configured and session.session_account
+                    and session.session_account.lower() != configured.lower()):
+                note = (
+                    f"\n⚠️ 這個身份與設定中的 UOF_ACCOUNT（{configured}）不同，"
+                    "後續操作一律以實際登入的身份送出；session 過期時不會自動改用設定的帳密，"
+                    "而是再次要求瀏覽器登入。"
+                )
+            return (
+                f"✅ UOF 登入完成，session 已取得（{self._identity_label(session)}）。{note}\n"
+                "可以繼續操作其他工具了。"
+            )
+        opened_line = (
+            "已在你的預設瀏覽器開啟 UOF 登入頁。"
+            if opened else
+            "⚠️ 無法自動開啟瀏覽器，請手動複製下面的網址到瀏覽器開啟："
+        )
+        return (
+            f"🔑 等待使用者完成登入中（已等 {wait:.0f} 秒）。\n"
+            f"{opened_line}\n\n"
+            f"    {flow.url}\n\n"
+            f"這個網址只能在本機開啟、且只有效一次；登入頁最多保留 {_bl.timeout_seconds():.0f} 秒。\n"
+            "請告訴使用者去瀏覽器完成登入，完成後再呼叫 `uof_custom_check_auth` 確認。\n"
+            "不要向使用者索取帳號密碼——帳密只會輸入在 UOF 自己的登入頁。"
+        )
+
+    def logout(self) -> str:
+        from ..auth.base import get_session_provider
+
+        get_session_provider().clear()
+        return (
+            "✅ 已登出：記憶體中的 session 已清除，磁碟上的 session 存檔也已刪除。\n"
+            "下次操作需要重新登入（呼叫 `uof_custom_login`）。"
         )
 
     # ── WKF reads ───────────────────────────────────────────────────

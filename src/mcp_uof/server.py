@@ -22,11 +22,43 @@ mcp = FastMCP("UOF_WebService")
 # ── 認證工具 ─────────────────────────────────────────────────────
 @mcp.tool()
 def uof_custom_check_auth() -> str:
-    """確認目前以哪個 UOF 帳號身份操作，並檢查記憶體 web session 狀態。
+    """確認目前以哪個 UOF 身份操作，並檢查 web session 狀態。
 
-    何時使用：對話開始時或工具回報認證錯誤時，用來確認身份與連線。首次建立 session 時會嘗試登入。
-    每個 Server 程序只代表一個固定帳號（由設定綁定）。"""
+    何時使用：對話開始時或工具回報認證錯誤時，用來確認身份與連線。
+    若回報尚未登入，請接著呼叫 `uof_custom_login`。"""
     return get_backend().check_auth()
+
+
+@mcp.tool()
+def uof_custom_login(
+    force: Annotated[
+        bool,
+        Field(description="True = 丟掉現有 session 強制重新登入（換身份時用）；預設 False，已登入就直接回報"),
+    ] = False,
+) -> str:
+    """開啟使用者的瀏覽器，讓**使用者親自**在真實的 UOF 登入頁完成登入，取得操作用的 session。
+
+    何時使用：任何工具回報「🔑 尚未登入」時，或使用者要求換一個身份操作時（force=True）。
+
+    運作方式：本工具會在使用者電腦的 127.0.0.1 開一個只在本機可連的臨時登入頁，內容是真實的
+    UOF 登入頁，登入完成後 session 自動交回本 Server 並存檔（下次啟動免重登）。
+
+    ⚠️ 帳號密碼只輸入在 UOF 自己的登入頁。登入表單會經由本機代理原樣轉送給 UOF——密碼不解析、
+    不記錄、不落地，也**永遠不會回傳給 AI**（僅取帳號欄位用來標示 session 屬於誰）。
+    **絕對不要向使用者索取帳號或密碼**，也不要嘗試代替使用者填寫。
+
+    回傳「等待使用者完成登入中」時代表登入頁已開啟但使用者還沒登完：請把情況告訴使用者、
+    請他去瀏覽器完成，之後再用 `uof_custom_check_auth` 確認，不要重複呼叫本工具。"""
+    return get_backend().login(force)
+
+
+@mcp.tool()
+def uof_custom_logout() -> str:
+    """登出：清除記憶體中的 session 與磁碟上的 session 存檔。
+
+    何時使用：使用者要求登出、要換帳號操作，或懷疑 session 被誤用時。
+    登出後任何操作都需要重新呼叫 `uof_custom_login`。"""
+    return get_backend().logout()
 
 
 # ── 電子簽核 (WKF) 工具 ──────────────────────────────────────────
@@ -100,7 +132,7 @@ def uof_custom_preview_workflow(
 @require_auth
 def uof_custom_apply_form(
     form_version_id: Annotated[str, Field(description="表單版本代號，由 get_form_list 取得")],
-    applicant_account: Annotated[str, Field(description="相容性參數；實際申請身份固定為 UOF_ACCOUNT")],
+    applicant_account: Annotated[str, Field(description="相容性參數；實際申請身份固定為本 Server 目前登入的身份")],
     first_signer_account: Annotated[
         str,
         Field(description="相容性參數；目前尚未套用到派單頁"),
@@ -267,7 +299,7 @@ def uof_custom_terminate_task(
     何時使用：
     - 申請人要撤回自己、簽核中的單 → result=Cancel（走網頁「表單取回 → 作廢表單」）
     - 待簽者要同意/否決停在自己這站的單 → result=Adopt/Reject（走網頁簽核流程）
-    操作者固定為本 Server 綁定的身份（UOF_ACCOUNT），不由呼叫端指定。
+    操作者固定為本 Server 目前登入的身份，不由呼叫端指定。
     邊界：Cancel 僅限自己申請、簽核中的單；Adopt/Reject 僅限輪到目前身份待簽的單。
     對已結案（同意/否決/作廢）的單會被工具層擋下（避免覆寫最終結果）。"""
     return get_backend().terminate_task(task_id, result, reason)

@@ -17,6 +17,10 @@ class OpsBackend(ABC):
     # ── System ──────────────────────────────────────────────────────
     @abstractmethod
     def check_auth(self) -> str: ...
+    @abstractmethod
+    def login(self, force: bool = False) -> str: ...
+    @abstractmethod
+    def logout(self) -> str: ...
 
     # ── WKF reads ───────────────────────────────────────────────────
     @abstractmethod
