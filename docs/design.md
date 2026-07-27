@@ -17,6 +17,8 @@
 | 工具 | 背後實際呼叫 | 異動 |
 | --- | --- | :-: |
 | `check_auth` | GET `Homepage.aspx`，判斷是否被導回 `Login.aspx` | 否 |
+| `login` | 127.0.0.1 反向代理真實 `Login.aspx`，取得 cookie 後存進 session 目錄 | 否 |
+| `logout` | 清空 cookie jar、關閉登入代理、刪除 session 存檔 | 否 |
 | `get_form_list` | GET 查詢頁下拉（`MyFormList.aspx?item=FormQuery`），解析表單樹 | 否 |
 | `get_external_form_list` | 無對應網頁端點（後台 admin 旗標），回說明並建議改用 `get_form_list` | 否 |
 | `get_form_structure` | `AddFormScript.aspx?formVersionId=…` → 解析欄位區塊 | 否 |
@@ -34,35 +36,56 @@
 | `query_forms` | POST `MyFormList.aspx?item=FormQuery`（帶日期＋關鍵字＋`query_mode` apply/sign），翻頁解析 RadGrid 列 | 否 |
 | `search_users` | `ChoiceCenter/ChoiceHandler.ashx` 人員查詢 | 否 |
 
-## 認證（web session，單一種）
+## 認證（web session，單一種機制）
 
-只有一種認證：`SessionAuthProvider`（`auth/session.py`）。
+只有一種認證機制：`Login.aspx` 的 cookie session，由 `SessionAuthProvider`（`auth/session.py`）管理。
 
 |          | 網頁（session）                                                   |
 | -------- | ----------------------------------------------------------------- |
-| 怎麼來   | 表單 POST `Login.aspx`（取 `__VIEWSTATE` 後帶帳密）               |
-| 存哪     | `httpx.Client` 的程序記憶體 cookie jar；不落盤                         |
-| 失效處理 | GET/POST 被導回 `Login.aspx` → 自動重登重試一次                   |
+| 怎麼來   | 三段來源依序：session 存檔 → 帳密 POST `Login.aspx` → 瀏覽器登入 |
+| 存哪     | `httpx.Client` 的程序記憶體 cookie jar；另存 `UOF_SESSION_DIR`（預設 `~/.uof`，`0600`）供重啟沿用 |
+| 失效處理 | GET/POST 被導回 `Login.aspx` → 依同一順序重新取得 session 後重試一次 |
 
-一個程序固定使用一個 `UOF_ACCOUNT`；不同 server process 各自持有 session。
+一個程序固定一個身份；不同 server process 各自持有 session。
+
+### 三段來源（`auth/session.py`、`auth/store.py`、`auth/browser_login.py`）
+
+| 順序 | 來源 | 條件 |
+| --: | --- | --- |
+| 1 | session 存檔（`store.load_session`，在 `HttpSession.__init__` 灌回 cookie jar） | 探測 `Homepage.aspx` 沒被踢回 `Login.aspx` |
+| 2 | 帳密自動登入（`HttpSession._do_login`） | `UOF_ACCOUNT` + `UOF_PASSWORD` 都有設 |
+| 3 | 瀏覽器登入（`browser_login.start_login_flow`） | 前兩者都不成立 → 拋 `BrowserLoginRequired` |
+
+瀏覽器登入在 `127.0.0.1` 起臨時反向代理，把真實的 `Login.aspx` 代理給使用者的瀏覽器；請求由
+`HttpSession._client` 實際發出，因此 `Set-Cookie` 直接落在既有的 cookie jar。安全邊界（只綁
+localhost、Host 檢查、一次性 token、不外流上游 `Set-Cookie`、同 host 限制、成功／逾時自關）寫在
+`auth/browser_login.py` 的模組 docstring。登入成功後 `store.save_session` 落地。
 
 ### 入口認證閘（`require_auth`）
 
-工具入口的 `@require_auth`（`auth/base.py`）在每次呼叫前 `get_session_provider().ensure_valid()`；失敗回固定的登入失敗訊息（🔒），成功才放行。工具本體的例外原樣拋出、不被包成登入失敗。裝飾期會 fail-loud 驗證該工具已在 `BINDING` 登錄（漏綁/改名會在 import server 時立刻爆）。
+工具入口的 `@require_auth`（`auth/base.py`）在每次呼叫前 `get_session_provider().ensure_valid()`，成功才放行。失敗分兩種訊息：
 
-### `check_auth` 的行為
+- `BrowserLoginRequired` → `browser_login_required_message`（🔑）：要 AI 呼叫 `uof_custom_login`，禁止索取帳密。
+- 其他 → `auth_failure_message`（🔒）：設定層級問題，要使用者檢查設定。
 
-`check_auth` 不需認證即可呼叫。首次取得 `HttpSession` 時會嘗試登入，接著 GET `Homepage.aspx`；被導回 `Login.aspx`＝未登入，否則＝已登入。
+工具本體也一併攔 `BrowserLoginRequired`（session 可能在通過閘門之後才過期）；其他例外原樣拋出、不被包成登入失敗。裝飾期會 fail-loud 驗證該工具已在 `BINDING` 登錄（漏綁/改名會在 import server 時立刻爆）。
+
+### `check_auth` / `login` / `logout` 的行為
+
+三者都不套認證閘。`check_auth` GET `Homepage.aspx`，被導回 `Login.aspx`＝未登入，並依是否具備帳密備援給不同指示；`login` 起代理並同步等 `UOF_LOGIN_WAIT_SECONDS`；`logout` 清記憶體 session、關閉登入流程並刪除 session 存檔。
 
 ## httpx 網頁抓取流程（共用）
 
 實作在 `ops/http_web.py`：`HttpSession`（`httpx.Client`）+ `HttpWebBackend`。複合 WebForms 操作不應在同一 session 中並行交錯。
 
-1. 首次呼叫 → GET `Login.aspx` 取 `__VIEWSTATE`，POST 帳密登入，cookie 由 `httpx.Client` 自動維持。
-2. 每次 GET/POST 若被導回 `Login.aspx`（session 過期），自動重新登入後重試一次。
-3. 本實作只支援同步整頁 postback（帶 `__EVENTTARGET` 與頁面狀態）；尚未支援 async partial postback。
+1. 建立 `HttpSession` 時先從 session 存檔灌回上次的 cookie；沒有或已失效才走登入。
+2. 帳密備援登入 → GET `Login.aspx` 取 `__VIEWSTATE`，POST 帳密，cookie 由 `httpx.Client` 自動維持。
+3. 每次 GET/POST 若被導回 `Login.aspx`（session 過期），自動重新取得 session 後重試一次。
+4. 本實作只支援同步整頁 postback（帶 `__EVENTTARGET` 與頁面狀態）；尚未支援 async partial postback。
 
-所需設定：`UOF_BASE_URL` / `UOF_ACCOUNT` / `UOF_PASSWORD`。不需瀏覽器 runtime；在 Alpine Linux 或 musl 環境仍須確認相依套件可安裝。
+所需設定：`UOF_BASE_URL`（必填），`UOF_ACCOUNT` / `UOF_PASSWORD`（選填，帳密備援用）。
+操作 UOF 不需瀏覽器 runtime；只有瀏覽器登入那一次會用到使用者自己的瀏覽器，無圖形介面的機器請用帳密備援。
+在 Alpine Linux 或 musl 環境仍須確認相依套件可安裝。
 
 ## 怎麼新增一個工具（可直接 follow）
 
@@ -80,6 +103,6 @@ httpx 端點常數集中在 `ops/http_web.py` 頂部（`Login.aspx`、`ApplyForm
 ## 能力現況
 
 - **查詢**：`get_form_list` / `get_form_structure(_by_id)` / `get_task_data` / `get_task_result` / `query_forms` / `search_users` 皆以 httpx 完成。`get_external_form_list` 無對應網頁端點，回說明。
-- **起單**：`apply_form_web` 支援 text / select / radio / datePicker / dialog picker 欄位與通用 dataGrid 明細。實際身份固定為 `UOF_ACCOUNT`，目前尚未套用 `first_signer_account`。附件、多站與並簽/會簽尚未支援。
+- **起單**：`apply_form_web` 支援 text / select / radio / datePicker / dialog picker 欄位與通用 dataGrid 明細。實際身份固定為本程序目前登入的身份，目前尚未套用 `first_signer_account`。附件、多站與並簽/會簽尚未支援。
 - **簽核/結案**：`sign_next`（自由流程單站同意）、`terminate_task`（Cancel 作廢 / Adopt·Reject 走簽核流程）。
 - **不提供**：`preview_workflow`（流程模擬）目前回「需在網頁操作」。

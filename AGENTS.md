@@ -15,7 +15,11 @@ This repository contains a Python MCP server for UOF first-generation workflow o
 ## Source package layout
 
 - `src/mcp_uof/server.py` — stdio MCP server entrypoint; registers the public `uof_custom_*` tools.
-- `src/mcp_uof/auth/` — authentication provider code for UOF web session login.
+- `src/mcp_uof/auth/` — authentication for UOF web session login.
+  - `base.py` defines the provider contract, the tool-entry auth gate, and the two failure messages.
+  - `session.py` resolves the session across its three sources (stored file, env credentials, browser login).
+  - `browser_login.py` runs the localhost reverse-proxy sign-in flow.
+  - `store.py` persists the cookie jar under `UOF_SESSION_DIR` (default `~/.uof`) with `0600` permissions.
 - `src/mcp_uof/ops/` — operation layer used by MCP tools.
   - `base.py` defines the backend interface.
   - `router.py` contains the tool-to-backend binding table.
@@ -25,9 +29,10 @@ This repository contains a Python MCP server for UOF first-generation workflow o
 ## Test layout
 
 - `tests/run.py` — unified test runner.
-- `tests/smoke/` — offline checks for imports and tool bindings.
+- `tests/smoke/` — offline checks for imports, tool bindings, session store, browser-login proxy, and auth priority.
 - `tests/mounted/` — real mounted MCP tests using a stdio subprocess and live UOF environment settings.
 - `tests/_common.py` — shared test helpers.
+- `tests/_fake_uof.py` — fake UOF upstream used by the offline authentication tests.
 
 ## Documentation map
 

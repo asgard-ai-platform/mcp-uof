@@ -1,22 +1,26 @@
 {
-  "_comment": "VS Code MCP 設定範例（放在 .vscode/mcp.json 或使用者 settings 的 mcp 區段）。env 區塊就是身份綁定處：一個 server = 一個 UOF 帳號。要以不同人員身份操作，複製一份 server 並改 UOF_ACCOUNT / UOF_PASSWORD。改完在 Chat 的工具面板重新整理或重載視窗。為避免密碼明文，下方示範用 inputs 提示輸入；不介意明文可直接寫進 env。",
-  "inputs": [
-    {
-      "id": "uof_password",
-      "type": "promptString",
-      "description": "UOF 登入密碼",
-      "password": true
+  "_comment": "VS Code MCP 設定範例（放在 .vscode/mcp.json 或使用者 settings 的 mcp 區段）。預設用瀏覽器登入：只需填 UOF_BASE_URL，啟動後在 Chat 呼叫 uof_custom_login，於瀏覽器完成登入。要換人操作就 uof_custom_logout 後重新登入，不必改設定。若因無人值守必須用帳密備援，取消下方 inputs 與 UOF_ACCOUNT / UOF_PASSWORD 的註解，讓密碼在啟動時輸入而不是明文寫死。",
+  "_unattended_fallback": {
+    "inputs": [
+      {
+        "id": "uof_password",
+        "type": "promptString",
+        "description": "UOF 登入密碼",
+        "password": true
+      }
+    ],
+    "env": {
+      "UOF_ACCOUNT": "service_account",
+      "UOF_PASSWORD": "${input:uof_password}"
     }
-  ],
+  },
   "servers": {
     "uof": {
       "type": "stdio",
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "your_account",
-        "UOF_PASSWORD": "${input:uof_password}"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }

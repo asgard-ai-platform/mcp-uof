@@ -31,6 +31,8 @@ UOF 的資料範圍完全跟隨登入身份的帳號。以一般簽核流程為�
 | Tool | 異動資料 | 備註 |
 | --- | :-: | --- |
 | `uof_custom_check_auth` | 否 | 回報 web session 登入狀態 |
+| `uof_custom_login` | 否 | 開瀏覽器讓使用者登入 UOF，取得 session |
+| `uof_custom_logout` | 否 | 清除記憶體與磁碟上的 session |
 | `uof_custom_get_form_list` | 否 | 表單清單（含 formId） |
 | `uof_custom_get_external_form_list` | 否 | 「非線上使用」旗標需在後台查，工具回說明 |
 | `uof_custom_get_form_structure` | 否 | 即時解析起單頁得到的欄位 |
@@ -52,9 +54,48 @@ UOF 的資料範圍完全跟隨登入身份的帳號。以一般簽核流程為�
 
 ### `uof_custom_check_auth()`
 
-回報目前帳號的記憶體 web session 是否已登入。此工具本身不觸發登入；任一套用認證閘的工具會在呼叫前建立 session。
+回報目前身份的 web session 是否已登入，以及認證來源（瀏覽器登入／環境變數帳密）。此工具本身不觸發瀏覽器登入。
 
-**使用情境**：對話開始時的健康檢查；除錯 `.env` 設定。
+未登入且沒有帳密備援時，會回 `🔑` 訊息要求呼叫 `uof_custom_login`。
+
+**使用情境**：對話開始時的健康檢查；確認登入是否完成；除錯設定。
+
+---
+
+### `uof_custom_login(force=False)`
+
+開啟使用者的預設瀏覽器，讓**使用者親自**在真實的 UOF 登入頁完成登入。
+
+| 參數 | 說明 |
+| --- | --- |
+| `force` | `True` = 丟掉現有 session 強制重登（換身份時用）；預設 `False`，已登入就直接回報 |
+
+**運作方式**：在 `127.0.0.1` 開一個只有本機能連的臨時反向代理，畫面是真實的 UOF 登入頁；完成後
+session 自動交回本 Server 並存進 session 目錄（`UOF_SESSION_DIR`，預設 `~/.uof`），下次啟動免重登。
+
+**回傳兩種結果**：
+
+- `✅ UOF 登入完成` — 已在等待時間內完成，可直接繼續操作。
+- `🔑 等待使用者完成登入中` — 登入頁已開啟但還沒登完。應請使用者去瀏覽器完成，之後用
+  `uof_custom_check_auth` 確認，**不要重複呼叫本工具**（會沿用同一個代理）。
+
+> [!IMPORTANT]
+> 帳號密碼只輸入在 UOF 自己的登入頁；登入表單經由本機代理原樣轉送給 UOF，密碼不解析、不記錄、
+> 不落地，也不會回傳給 AI。
+> **絕對不要向使用者索取帳號或密碼，也不要嘗試代替使用者填寫。**
+
+等待秒數由 `UOF_LOGIN_WAIT_SECONDS`（預設 45）、代理存活秒數由 `UOF_LOGIN_TIMEOUT_SECONDS`
+（預設 600）控制。
+
+**使用情境**：任何工具回報 `🔑 尚未登入` 時；使用者要求換身份時（`force=True`）。
+
+---
+
+### `uof_custom_logout()`
+
+清除記憶體中的 session 與磁碟上的 session 存檔，並收掉尚未完成的登入流程。
+
+**使用情境**：使用者要求登出、要換帳號操作，或懷疑 session 被誤用時。登出後任何操作都需重新 `uof_custom_login`。
 
 ---
 
@@ -87,7 +128,7 @@ skill/agent 以其他 MCP primitive 或 UOF Web UI 組合處理。
 | 參數 | 說明 |
 | --- | --- |
 | `form_version_id` | 表單版本代號，由 `get_form_list` 取得 |
-| `applicant_account` | 相容性參數；目前不改變申請身份，實際身份固定為 `UOF_ACCOUNT` |
+| `applicant_account` | 相容性參數；目前不改變申請身份，實際身份為本 Server 目前登入的身份 |
 | `first_signer_account` | 相容性參數；目前尚未套用到派單頁，不能用來保證首站路由 |
 | `fields` | `{fieldId: 值}`；dataGrid 明細為 `{fieldId: [row, ...]}`；**對話框欄位改帶 dict**（見下）。請先呼叫 `get_form_structure_by_id` |
 | `comment` | 申請者意見（選填） |
@@ -130,7 +171,7 @@ UOF 的複合欄位（請購明細、主要欄位、費用明細…）實質內�
 
 ### `uof_custom_terminate_task(task_id, result, reason)`
 
-結案。`result`: `Adopt`（同意）/ `Reject`（否決）/ `Cancel`（作廢）。操作者固定為本 Server 綁定的身份（`UOF_ACCOUNT`），不由呼叫端指定。
+結案。`result`: `Adopt`（同意）/ `Reject`（否決）/ `Cancel`（作廢）。操作者固定為本 Server 目前登入的身份，不由呼叫端指定。
 
 - **Cancel（作廢/撤單）**：對自己申請、簽核中的單走網頁「表單取回 → 作廢表單」（`FormGetBack.aspx`）。
 - **Adopt / Reject（同意/否決）**：委派網頁簽核流程，只能對**輪到目前身份待簽**的單執行；歷程記為本人。

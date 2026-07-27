@@ -10,17 +10,18 @@ Built for Claude Code, Claude Desktop, VS Code, and any MCP-compatible client. I
 
 ## What This Does
 
-- **17 exposed tools** for UOF workflow operations. `preview_workflow` and `get_external_form_list` currently return capability guidance rather than live data.
+- **19 exposed tools** for UOF workflow operations. `preview_workflow` and `get_external_form_list` currently return capability guidance rather than live data.
 - **MCP server** over stdio for local AI clients.
 - **Tool-first interface**: users call the same tools without ever choosing a mechanism — how each tool talks to UOF is an internal, developer-time decision.
-- **Single identity model**: one server process represents one UOF account configured through environment variables.
+- **Browser sign-in**: `uof_custom_login` opens the real UOF login page in the user's own browser and captures the session. The local MCP proxy relays the login form to UOF, so the password transits the server process in memory but is never parsed, logged, persisted, written to a config file, or returned to the AI. An unattended username/password fallback stays available for CI.
+- **Single identity model**: one server process represents one UOF identity, and the session persists across restarts.
 - **httpx web automation**: operations use HTTPS requests (`httpx` + `lxml`) against UOF's `aspx`/`ashx` endpoints, without a browser runtime. On Alpine Linux or musl, ensure binary wheels or native build dependencies are available.
 
 ## API Reference
 
 This project targets UOF first-generation web flows, driven over httpx.
 
-- Authentication: UOF account/password posted to `Login.aspx`, maintaining a cookie session.
+- Authentication: a `Login.aspx` cookie session, obtained either through browser sign-in or the credential fallback.
 - Base URL: configured with `UOF_BASE_URL`, for example `https://your-uof-domain.com/VirtualPath`.
 - Required UOF settings: see [docs/configuration.md](docs/configuration.md).
 
@@ -37,13 +38,17 @@ uv sync
 cp .env.example .env
 ```
 
-Set the required environment variables:
+Set the connection URL — that is the only required variable:
 
 ```bash
 export UOF_BASE_URL=https://your-uof-domain.com/VirtualPath
-export UOF_ACCOUNT=your_account
-export UOF_PASSWORD=your_password
 ```
+
+Sign in by calling the `uof_custom_login` tool in your chat: it opens the real UOF login page in
+your default browser, and the session is handed back to the server once you log in. Credentials
+are relayed as-is by the local proxy — never parsed, logged, persisted, or returned to the AI, and
+never written to a config file. See [docs/configuration.md](docs/configuration.md)
+for the unattended (username/password) fallback used by CI.
 
 ### Use with Claude Code
 
@@ -58,8 +63,6 @@ Or with environment variables inline:
 ```bash
 claude mcp add --transport stdio uof \
   -e UOF_BASE_URL=https://your-uof-domain.com/VirtualPath \
-  -e UOF_ACCOUNT=your_account \
-  -e UOF_PASSWORD=your_password \
   -- mcp-uof
 ```
 
@@ -79,9 +82,7 @@ Add to your `claude_desktop_config.json`:
     "uof": {
       "command": "mcp-uof",
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "your_account",
-        "UOF_PASSWORD": "your_password"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }
@@ -97,9 +98,7 @@ Or with a local checkout:
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "your_account",
-        "UOF_PASSWORD": "your_password"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     }
   }
@@ -108,13 +107,13 @@ Or with a local checkout:
 
 See [docs/integration.md](docs/integration.md) and [examples/](examples/) for more client configuration examples.
 
-## Tools (17)
+## Tools (19)
 
 All tool names use the `uof_custom_` prefix.
 
 | Domain | Tools |
 | --- | --- |
-| System | `check_auth` |
+| System | `check_auth`, `login`, `logout` |
 | WKF Workflow | `get_form_list`, `get_external_form_list`, `query_forms`, `get_pending_sign_list`, `search_users`, `get_form_structure`, `get_form_structure_by_id`, `get_dialog_structure`, `search_dialog_options`, `operate_dialog`, `preview_workflow`, `apply_form`, `get_task_data`, `get_task_result`, `sign_next`, `terminate_task` |
 
 Important behavior and constraints:
@@ -124,7 +123,7 @@ Important behavior and constraints:
 - `sign_next` performs approval for the current pending step and can close the flow or route to a designated next signer. It does not accept a signing comment; return, parallel/countersign, and fixed-flow stepping still require the Web UI.
 - `terminate_task` closes a task: `Cancel` voids an in-flight form (via the web recall page), `Adopt`/`Reject` approve/reject through the web sign flow. It checks task status first and blocks repeated closure of an already-closed task.
 - `preview_workflow` (flow simulation) is not available over httpx and directs the user to the Web UI; you can still submit directly with `apply_form` and inspect the real signing route afterward with `get_task_result`.
-- `apply_form` always submits as the configured `UOF_ACCOUNT`. Its `applicant_account` and `first_signer_account` parameters are currently retained for interface compatibility but do not change the submitted identity or routing.
+- `apply_form` always submits as the identity this server process is signed in as (the browser-login user, or the configured `UOF_ACCOUNT` when the credential fallback is used). Its `applicant_account` and `first_signer_account` parameters are currently retained for interface compatibility but do not change the submitted identity or routing.
 
 See [docs/tools.md](docs/tools.md) for full tool specs, role model, examples, and operational boundaries.
 

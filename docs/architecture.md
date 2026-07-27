@@ -34,28 +34,64 @@ MCP client (Claude Desktop / VS Code)
 
 ## 認證（機制的前提，非使用者選項）
 
-只有一種認證：`SessionAuthProvider`（`mcp_uof/auth/`）。首次建立 `HttpSession` 時會嘗試登入，之後由工具入口與 HTTP redirect 處理 session 驗證或重登。
+只有一種認證機制：`Login.aspx` 的 cookie session，由 `SessionAuthProvider`（`mcp_uof/auth/`）管理。
+取得那個 cookie 有三段來源，依序嘗試：
 
-- **http_web → SessionAuthProvider**：`HttpSession`（`httpx.Client`）POST `Login.aspx` 取得 cookie；每次 GET/POST 若被重導至 Login.aspx 就自動重新登入後重試。同一程序內的複合操作不應並行交錯。
+| 順序 | 來源 | 條件 |
+| --: | --- | --- |
+| 1 | session 存檔（`auth/store.py`，位置由 `UOF_SESSION_DIR` 決定，預設 `~/.uof`） | 存檔存在且探測 `Homepage.aspx` 沒被踢回 `Login.aspx` |
+| 2 | 帳密自動登入 | `UOF_ACCOUNT` + `UOF_PASSWORD` 都有設（CI／`tests/mounted/` 走這條） |
+| 3 | 瀏覽器登入（`auth/browser_login.py`） | 前兩者都不成立 → 要求呼叫 `uof_custom_login` |
 
-### 身份模型（單一身份，設定時綁定）
+`HttpSession`（`httpx.Client`）持有 cookie jar；每次 GET/POST 若被重導至 Login.aspx 就依同一順序重新
+取得 session 後重試。同一程序內的複合操作不應並行交錯。
 
-UOF 一代以帳密登入，每個 server process 使用一個固定的 UOF 使用者身份：
+### 瀏覽器登入：為什麼是反向代理
 
-- **一個 MCP Server 程序 = 一個固定身份**，由 `UOF_ACCOUNT` 決定（寫在 MCP Host 設定的 `env` 區塊）。
-- **要切換操作者 = 切換 MCP 設定**（不同 server entry 帶不同 `UOF_ACCOUNT`/`UOF_PASSWORD`）。
-- session cookie 只保存在該程序的記憶體；程序重啟後會重新登入。不同 server entry 各自持有獨立 session。
+瀏覽器裡的 cookie MCP 程序拿不到，而 UOF 的 session cookie 是 HttpOnly，頁面 JS 也讀不到。
+所以 `uof_custom_login` 在 `127.0.0.1` 起臨時反向代理：
 
-> 可見與可操作的資料由該帳號在 UOF 中的權限決定。
+```text
+使用者的瀏覽器 ──> 127.0.0.1:<隨機port>（代理）──> HttpSession._client ──> UOF Login.aspx
+                                                        └── Set-Cookie 落在這裡
+```
 
-登入失敗（帳密錯、連線設定錯等）一律回固定的失敗說明（`auth.base.auth_failure_message`），明確要使用者檢查設定，不讓 AI 自行臆測。
+畫面是真的登入頁（AD 認證、驗證碼、隱藏欄位都自然相容），但請求由本程序發出，cookie 天生就屬於
+我們，也不會踩到 session 綁 UA／IP 的問題。安全邊界見 `auth/browser_login.py` 的模組 docstring。
+
+> 目前部署沒有外部 SSO，代理只轉發同 host 請求。日後若導入跨網域 SSO（如 ADFS）需改為網域白名單。
+
+### 身份模型（單一身份，程序層綁定）
+
+每個 server process 使用一個固定的 UOF 使用者身份：
+
+- **一個 MCP Server 程序 = 一個身份**。走帳密備援時由 `UOF_ACCOUNT` 決定；走瀏覽器登入時由**實際登入的人**決定。
+- **實際身份怎麼知道**：登入表單經過本機代理時取出帳號欄位（只取帳號，不碰密碼）。所有身份顯示與
+  session 存檔歸屬都以它為準——**不會退回 `UOF_ACCOUNT`**，因為使用者可能登入了另一個人。
+- **要換身份**：呼叫 `uof_custom_logout` 後重新 `uof_custom_login`（或 `uof_custom_login(force=True)`）；
+  帳密備援模式則是改設定、換 server entry。
+- session cookie 存在程序記憶體，並依「站台＋實際登入帳號」分別存到 `UOF_SESSION_DIR`
+  （預設 `~/.uof`，`0600`），重啟免重登。多身份共機的定位規則見 [configuration.md](configuration.md)。
+
+> 可見與可操作的資料由該身份在 UOF 中的權限決定。
+
+**身份不會在程序中途改變**：一旦以瀏覽器登入，session 失效時**不會**改用 `UOF_ACCOUNT` 的帳密自動
+重登（那會讓操作身份悄悄從實際登入者變回設定值），而是再次要求瀏覽器登入。實際登入者與
+`UOF_ACCOUNT` 不同時，`login` / `check_auth` 會主動警告。
+
+登入失敗分兩類，訊息刻意分開，不讓 AI 混為一談：
+
+- **尚未登入** → `auth.base.browser_login_required_message`（🔑）：要 AI 去呼叫 `uof_custom_login`，
+  並明確禁止向使用者索取帳密。
+- **設定層級失敗**（連線錯、備援帳密錯）→ `auth.base.auth_failure_message`（🔒）：要使用者檢查設定，不讓 AI 自行臆測。
 
 ## 工具對照
 
-17 個工具一律對外可用、一律走 http_web：
+19 個工具一律對外可用、一律走 http_web：
 
 | 工具 | 說明 |
 | --- | --- |
+| login / logout | 開瀏覽器登入取得 session／清除記憶體與磁碟的 session |
 | check_auth / get_form_list / get_external_form_list | 網頁查詢 |
 | get_form_structure(_by_id) | 即時解析起單頁得到的欄位結構 |
 | get_dialog_structure / search_dialog_options / operate_dialog | 對話框欄位的內部結構／挑選器候選／填值按鈕探測 |
@@ -64,7 +100,7 @@ UOF 一代以帳密登入，每個 server process 使用一個固定的 UOF 使�
 | get_task_data / get_task_result | 查單摘要＋欄位 / 逐站簽核歷程（ViewFormTemp 解析） |
 | terminate_task | Cancel＝作廢（FormGetBack）；Adopt/Reject＝走網頁簽核流程 |
 | sign_next | 自由流程單站同意（SignNodeForm → SendOtherSite/OtherSiteSend） |
-| get_pending_sign_list | 目前輪到本帳號待簽的單（首頁待簽 widget） |
+| get_pending_sign_list | 目前輪到本身份待簽的單（首頁待簽 widget） |
 | query_forms / search_users | 查詢自己送出/簽過的單 / 查人員 |
 
 ## Package Layout
@@ -74,7 +110,7 @@ mcp-uof/
 ├── src/mcp_uof/
 │   ├── server.py        # MCP Server 入口，註冊 uof_custom_* 工具，派發到 get_backend()
 │   ├── ops/             # 操作面：router(BINDING)、base(協定)、http_web(httpx+lxml)
-│   └── auth/            # 認證（機制前提）：base、session
+│   └── auth/            # 認證（機制前提）：base、session、browser_login(反向代理)、store(session 落地)
 ├── tests/               # 兩層測試：smoke（離線）/ mounted（真實掛載 MCP）
 └── docs/
 ```

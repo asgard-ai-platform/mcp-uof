@@ -1,24 +1,21 @@
 {
-  "_comment": "每個 server entry 綁定一個 UOF 帳號；請使用安全方式提供密碼。",
+  "_comment": "預設用瀏覽器登入：只需填 UOF_BASE_URL，綁好後在對話中呼叫 uof_custom_login，於瀏覽器完成登入即可。身份就是實際登入的那個人；要換人就 uof_custom_logout 後重新登入。",
   "mcpServers": {
     "uof": {
-      "_comment": "第一個操作身份。",
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
-        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "your_account",
-        "UOF_PASSWORD": "your_password"
+        "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
     },
-    "uof-manager": {
-      "_comment": "第二個操作身份，可與第一個 entry 同時啟用。",
+    "uof-unattended": {
+      "_comment": "帳密自動登入備援：僅在無人值守（CI、自動化）或需要同時具備兩種身份時使用。兩個變數都填才會生效；請以安全方式提供密碼，不要明文入版控。",
       "command": "uv",
       "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
       "env": {
         "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath",
-        "UOF_ACCOUNT": "manager_account",
-        "UOF_PASSWORD": "manager_password"
+        "UOF_ACCOUNT": "service_account",
+        "UOF_PASSWORD": "service_password"
       }
     }
   }

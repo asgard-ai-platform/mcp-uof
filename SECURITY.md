@@ -18,7 +18,12 @@ Report privately to the repository maintainers through your normal security cont
 ## Credential Handling
 
 - Never commit `.env`, UOF accounts or passwords, generated reports, or local credential/cookie files.
-- The MCP server logs in with the plaintext `UOF_ACCOUNT` / `UOF_PASSWORD` from `.env` (posted to UOF's `Login.aspx` over HTTPS, maintaining a cookie session). Keep `.env` out of version control.
+- By default the MCP server signs in through the browser: `uof_custom_login` runs a temporary reverse proxy bound to `127.0.0.1` (random port, one-time token, Host check, auto-shutdown) so the user logs in on UOF's own page. The login form is relayed as-is through the proxy, so the
+  password does transit the server process in memory — it is never parsed, logged, persisted, or
+  returned to the AI, and never stored in a config file. Only the account field is read, to label
+  which identity a stored session belongs to.
+- The resulting session is stored at `$UOF_SESSION_DIR/session-*.json` (default `~/.uof`) with `0600` permissions. **That file is a replayable session cookie — treat it like a password.** Revoke it with `uof_custom_logout`, or set `UOF_SESSION_PERSIST=false` to keep the session in memory only.
+- An unattended fallback logs in with the plaintext `UOF_ACCOUNT` / `UOF_PASSWORD` from `.env` (posted to UOF's `Login.aspx` over HTTPS). Keep `.env` out of version control and prefer browser sign-in wherever a human is present.
 - Use `.env.example` for placeholders only.
 - Treat manual and end-to-end test outputs as sensitive unless reviewed and sanitized.
 

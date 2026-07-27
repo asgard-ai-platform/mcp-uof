@@ -14,8 +14,11 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 
 | 層 | 路徑 | 是否需真實環境 | 涵蓋 |
 | --- | --- | --- | --- |
-| **Smoke** | `tests/smoke/` | 否（CI 可跑） | 模組可匯入（自動探索）、工具→機制綁定（一律 `http_web`）、認證閘（session） |
-| **Mounted** | `tests/mounted/` | 是 | 真實掛載 MCP：工具註冊護欄 + 測試表單多身份全程 + 負向認證（深度保真） |
+| **Smoke** | `tests/smoke/` | 否（CI 可跑） | 模組可匯入（自動探索）、工具→機制綁定（一律 `http_web`）、認證閘、session 存檔、瀏覽器登入代理、三段認證優先序 |
+| **Mounted** | `tests/mounted/` | 是 | 真實掛載 MCP：工具註冊護欄 + 測試表單多身份全程 + 負向認證 + 登入態管理（深度保真） |
+
+> 瀏覽器登入需要真人操作，不在自動化覆蓋範圍：代理行為由 smoke 層對假 upstream 驗證，真實 UOF 登入頁的渲染需人工確認一次（`UOF_LOGIN_DEBUG=1` 可看逐筆代理請求）。
+> mounted 會把 `HOME` 指到暫存目錄以隔離 session 存檔（預設在 `~/.uof`）——負向認證段落尤其依賴這點。
 
 ### Mounted（真實掛載 MCP）定義
 
