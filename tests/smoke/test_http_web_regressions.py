@@ -13,6 +13,9 @@ from mcp_uof.ops.http_web import (  # noqa: E402
     _FORM_CACHE_TTL_SECONDS,
     _map_row_to_columns,
     _mark_filled,
+    _parse_filled_form_fields,
+    _resolve_checkbox_value,
+    _uof_row_date,
 )
 
 
@@ -38,6 +41,19 @@ def _session_with_client(client: _Client) -> HttpSession:
     s._vpath = ""
     s._client = client
     return s
+
+
+def _form_rows_html(rows) -> str:
+    rendered = ['<input type="hidden" name="__VIEWSTATE" value="vs">']
+    for i, (task_id, apply_time) in enumerate(rows):
+        cls = "GridItem" if i % 2 == 0 else "GridItemAlternating"
+        rendered.append(
+            f'<tr class="{cls}">'
+            f'<td>F-{i}</td><td>測試表單</td><td>摘要</td><td>申請者</td><td>處理中</td>'
+            f'<td>{apply_time}</td><td></td>'
+            f"<td><a onclick=\"openForm('TASK_ID={task_id}')\">開啟</a></td></tr>"
+        )
+    return "<html><body><form><table>" + "".join(rendered) + "</table></form></body></html>"
 
 
 def main() -> int:
@@ -89,6 +105,82 @@ def main() -> int:
         "明細列欄名可映射到欄位 index",
         mapped == {0: "筆", 1: 2} and unmatched == [],
         f"mapped={mapped}, unmatched={unmatched}",
+    )
+
+    rendered_grid = """
+    <table id="ctl00_tbFieldCollection"><tr><td>
+      <span class="TitleFont">合成複合欄位</span><span class="FieldHide">(BLOCK)</span>
+      <table id="ctl00_Grid1">
+        <tr><th>項次</th><th>任意額外欄</th></tr>
+        <tr><td>1</td><td>保留值</td></tr>
+      </table>
+    </td></tr></table>
+    """
+    parsed_grid = _parse_filled_form_fields(
+        HttpSession.__new__(HttpSession)._parse(_Resp("https://uof.example/View.aspx", rendered_grid))
+    )
+    failures += _common.check(
+        "get_task_data Grid parser 保留頁面渲染的任意額外欄位",
+        parsed_grid[0]["grid"][0]["rows"]
+        == [["項次", "任意額外欄"], ["1", "保留值"]],
+        str(parsed_grid),
+    )
+
+    checked, posted, err = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], "否"
+    )
+    unchecked, _, false_err = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], False
+    )
+    _, _, bad_checkbox = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], "不轉"
+    )
+    failures += _common.check(
+        "checkbox 合法選項「否」優先於布林 false 語意且未知字串會擋下",
+        checked and posted == "否" and err is None
+        and not unchecked and false_err is None
+        and bad_checkbox is not None,
+        f"checked={checked}, posted={posted}, err={err}, bad={bad_checkbox}",
+    )
+
+    in_range = {"apply_time": "2030/01/15 20:21", "close_time": "2030-01-16"}
+    outside = {"apply_time": "2030/01/14 23:59", "close_time": ""}
+    failures += _common.check(
+        "query_forms 可從 UOF 日期時間欄位抽出正確日期供 client-side 範圍過濾",
+        str(_uof_row_date(in_range, "apply")) == "2030-01-15"
+        and str(_uof_row_date(outside, "apply")) == "2030-01-14"
+        and _uof_row_date(in_range, "sign") is None,
+    )
+
+    page1 = _form_rows_html([
+        ("00000000-0000-0000-0000-000000000001", "2030/01/15 20:21"),
+        ("00000000-0000-0000-0000-000000000002", "2030/01/15 09:00"),
+        ("00000000-0000-0000-0000-000000000003", "2030/01/14 23:59"),
+    ])
+    page2 = _form_rows_html([
+        ("00000000-0000-0000-0000-000000000004", "2030/01/14 12:00"),
+    ])
+    query_session = HttpSession.__new__(HttpSession)
+    query_session.get = lambda _path: _Resp("https://uof.example/MyFormList.aspx", page1)
+    query_posts = []
+
+    def _query_post(_path, payload, retry_on_login=True):
+        query_posts.append(dict(payload))
+        html = page1 if any(k.endswith("wibQuery") for k in payload) else page2
+        return _Resp("https://uof.example/MyFormList.aspx", html)
+
+    query_session.post = _query_post
+    date_result = query_session.search_forms(
+        date_from="2030/01/15", date_to="2030/01/15", max_results=30
+    )
+    failures += _common.check(
+        "query_forms 不以 max_results 補入日期範圍外資料且共 N 筆採符合筆數",
+        date_result["ok"]
+        and len(date_result["rows"]) == 2
+        and date_result["total_matched"] == 2
+        and all(r["apply_time"].startswith("2030/01/15") for r in date_result["rows"])
+        and len(query_posts) == 2,
+        str(date_result),
     )
 
     print("=" * 50)

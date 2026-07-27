@@ -33,8 +33,8 @@ uv run python tests/run.py mounted
 
 - `smoke` 為離線測試，應可在 CI 執行。
 - `mounted` 需要真實測試環境與 `.env`。
-- 真實層測試只使用 `.env` 中設定的測試帳號。
-- Mounted 測試只操作 `UOF_TEST_WORKFLOW_FORM_NAME` 指定的隔離測試表單。
+- 真實層只使用 `.env` 的單一 `UOF_ACCOUNT`，執行認證與唯讀查詢。
+- 部署端表單寫入驗證不屬於公開 repo 的 mounted 自動測試。
 
 ## 送出前品質與機敏掃描 (Pre-commit Quality & Security Scan)
 

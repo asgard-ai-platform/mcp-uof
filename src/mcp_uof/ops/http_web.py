@@ -589,6 +589,16 @@ def _choice_controls(tree, keep) -> list:
     return out
 
 
+def _matches_uc_prefix(control_name: str, uc_prefix: str) -> bool:
+    """Match one versionFieldUC group without confusing UC1 with UC10."""
+    if not control_name or not uc_prefix:
+        return False
+    return bool(re.search(
+        rf"(?:^|[$_]){re.escape(uc_prefix)}(?:$|[$_])",
+        control_name,
+    ))
+
+
 def _parse_inline_controls(tree, uc_prefix: str) -> list:
     """Named controls a plugin renders inline inside one `versionFieldUC<N>` block.
 
@@ -602,12 +612,13 @@ def _parse_inline_controls(tree, uc_prefix: str) -> list:
     out = []
     for el in tree.xpath("//input[@type='text'] | //select | //textarea"):
         name = el.get("name") or ""
-        if uc_prefix not in name or name.startswith("__"):
+        if not _matches_uc_prefix(name, uc_prefix) or name.startswith("__"):
             continue
         label, required = _control_label(el)
         out.append({
             "name": name,
-            "id": (el.get("id") or "").split("_")[-1],
+            # Some plugin controls expose only ASP.NET's `$`-separated name.
+            "id": re.split(r"[_$]", el.get("id") or name)[-1],
             "label": label,
             "required": required,
             "type": "select" if el.tag == "select" else (el.tag if el.tag == "textarea" else "text"),
@@ -616,7 +627,7 @@ def _parse_inline_controls(tree, uc_prefix: str) -> list:
             "hidden": "HideMe" in (el.get("class") or ""),
             "lookup_buttons": [],
         })
-    out.extend(_choice_controls(tree, lambda n: uc_prefix in n))
+    out.extend(_choice_controls(tree, lambda n: _matches_uc_prefix(n, uc_prefix)))
     return out
 
 
@@ -662,12 +673,121 @@ def _parse_dialog_fields(dialog_html: str) -> list:
             "readonly": el.get("readonly") is not None or el.get("disabled") is not None,
             "hidden": "HideMe" in cls or "display:none" in style,
             "lookup_buttons": [
-                (b.get("id") or "").split("_")[-1]
+                re.split(r"[_$]", b.get("id") or b.get("name") or "")[-1]
                 for b in (row.xpath(".//input[@type='submit'] | .//input[@type='button']") if row is not None else [])
             ],
         })
     out.extend(_choice_controls(tree, lambda n: True))
     return out
+
+
+_DIALOG_OPEN_RE = re.compile(r"open2?\(\s*['\"]([^'\"]+?\.aspx[^'\"]*)['\"]", re.I)
+
+
+def _find_row_editor_openers(
+    page_html: str,
+    exclude_basenames: set,
+    owner_prefix: str = "",
+) -> list:
+    """Buttons on the apply page that open a detail-row editor dialog — read from the DOM.
+
+    A detail grid's "add row" button carries an onclick that opens a `*.aspx` dialog. We collect
+    every such (button, dialog-url) except the block's own picker dialog. No form/dialog/field
+    name is hardcoded: the linkage is read straight from each button's onclick, so it works for
+    any plugin form (ItemDialog / GUIsDialog / whatever the deployment renders).
+    """
+    tree = _html_fromstring(page_html)
+    out, seen = [], set()
+    for el in tree.xpath("//input[@onclick] | //a[@onclick] | //button[@onclick]"):
+        control_name = el.get("name") or el.get("id") or ""
+        if owner_prefix and not _matches_uc_prefix(control_name, owner_prefix):
+            continue
+        m = _DIALOG_OPEN_RE.search(html.unescape(el.get("onclick") or ""))
+        if not m:
+            continue
+        url = m.group(1).replace("&amp;", "&")
+        base = url.split("/")[-1].split("?")[0]
+        if base in exclude_basenames or url in seen:
+            continue
+        seen.add(url)
+        out.append({
+            "open_button": re.split(r"[_$]", control_name)[-1],
+            "control_name": control_name,
+            "url": url,
+            "basename": base,
+        })
+    return out
+
+
+def _lookup_dialog_target(dialog_html: str, button_id: str) -> str:
+    """The `*.aspx` dialog a given lookup button (by id suffix) opens, read from its onclick.
+
+    Lets a nested row-editor picker (料號/科目 …) be queried later without any hardcoded name.
+    """
+    tree = _html_fromstring(dialog_html)
+    for el in tree.xpath("//input[@onclick] | //a[@onclick] | //button[@onclick]"):
+        control_name = el.get("id") or el.get("name") or ""
+        if re.split(r"[_$]", control_name)[-1] != button_id:
+            continue
+        m = _DIALOG_OPEN_RE.search(html.unescape(el.get("onclick") or ""))
+        if m:
+            return m.group(1).replace("&amp;", "&")
+    return ""
+
+
+def _missing_required_controls(tree, uc_prefix: str, payload: dict) -> list:
+    """Return required inline controls whose rendered/postback value is still empty."""
+    return [
+        c for c in _parse_inline_controls(tree, uc_prefix)
+        if c.get("required") and not str(payload.get(c["name"], "")).strip()
+    ]
+
+
+def _missing_required_dialog_fields(fields: list, payload: dict) -> list:
+    """Return required row-editor fields still empty immediately before confirm."""
+    return [
+        c for c in fields
+        if c.get("required") and not c.get("hidden")
+        and not str(payload.get(c["name"], "")).strip()
+    ]
+
+
+def _resolve_checkbox_value(options: list, value) -> tuple:
+    """Resolve one ASP.NET checkbox to (checked, posted_value, error).
+
+    A checkbox option labelled/value ``否`` is still a real selectable option: matching the
+    server-advertised option takes precedence over interpreting free-form false-like strings.
+    """
+    sv = str(value).strip()
+    hit = next((o for o in options if sv in (str(o["value"]), str(o["label"]))), None)
+    if hit is not None:
+        return True, str(hit["value"]), None
+    if isinstance(value, bool):
+        return value, (str(options[0]["value"]) if value and options else "on"), None
+    low = sv.lower()
+    if low in ("true", "1", "yes", "y", "是", "勾選", "checked"):
+        return True, (str(options[0]["value"]) if options else "on"), None
+    if low in ("", "false", "0", "no", "n", "否", "未", "unchecked"):
+        return False, "", None
+    allowed = "／".join(str(o["label"]) for o in options)
+    hint = f"，只能填：{allowed}、true 或 false" if allowed else "，只能填 true 或 false"
+    return False, "", f"值『{value}』不是有效 checkbox 選項{hint}"
+
+
+def _uof_row_date(row: dict, query_mode: str) -> Optional[date]:
+    """Extract the date used by query_forms from one rendered result row."""
+    # The result grid exposes apply/close time, but not the time at which this user signed.
+    # Therefore only apply-mode has a trustworthy client-side date source.
+    if query_mode != "apply":
+        return None
+    raw = row.get("apply_time", "") or ""
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", raw)
+    if not m:
+        return None
+    try:
+        return date(*(int(v) for v in m.groups()))
+    except ValueError:
+        return None
 
 
 def _parse_filled_form_fields(tree) -> list:
@@ -932,6 +1052,37 @@ def _temp_return_value(html_text: str):
         return None
     val = html.unescape(m.group(1))
     return None if val in ("", "NeedPostBack", "[DefaultNullValue]") else val
+
+
+def _dialog_reject_reason(html_text: str) -> str:
+    """Why a row-editor dialog refused a row, read straight off the confirm response.
+
+    Two independent signals, whichever the page carries: ASP.NET required-field validators that
+    fired (their span renders without `display:none`), and any server-side validation-API failure
+    echoed into the page. Stays domain-free — it reports whatever field markers / messages the
+    page itself names, so the caller stops guessing 「沒帶內部 Id」 when the real reason is 必填未填
+    or a business rule (e.g. 憑證格式與發票字軌不匹配)."""
+    parts: list = []
+    fired: list = []
+    for m in re.finditer(r'id="[^"]*?_RF_(\w+)"([^>]*)>\s*<font color="Red">[^<]*必填', html_text):
+        style = re.search(r'style="([^"]*)"', m.group(2) or "")
+        if not (style and "display:none" in style.group(1).replace(" ", "").lower()):
+            fired.append(m.group(1))
+    if fired:
+        parts.append("必填未填/未帶：" + "、".join(dict.fromkeys(fired)))
+    decoder = json.JSONDecoder()
+    decoded_html = html.unescape(html_text)
+    for m in re.finditer(r'"errorMessage"\s*:\s*', decoded_html):
+        try:
+            messages, _ = decoder.raw_decode(decoded_html[m.end():])
+            if not isinstance(messages, list):
+                raise ValueError("errorMessage 不是陣列")
+            for message in messages:
+                if message not in (None, ""):
+                    parts.append("伺服器驗證：" + str(message))
+        except (TypeError, ValueError):
+            parts.append("伺服器驗證訊息格式無法解析")
+    return "；".join(parts)
 
 
 _DATAGRID_DIALOG_RE = r"['\"]([^'\"]*SetupDataGridFieldValue\.aspx\?[^'\"]*fieldId={code}[^'\"]*)['\"]"
@@ -1412,6 +1563,14 @@ class HttpSession:
         dt_dash = dt_raw.replace("/", "-")
         df_slash = df_dash.replace("-", "/")
         dt_slash = dt_dash.replace("-", "/")
+        try:
+            df_date = date.fromisoformat(df_dash)
+            dt_date = date.fromisoformat(dt_dash)
+        except ValueError:
+            return {"ok": False, "rows": [],
+                    "reason": "date_from / date_to 需為 yyyy/mm/dd 或 yyyy-mm-dd"}
+        if df_date > dt_date:
+            return {"ok": False, "rows": [], "reason": "date_from 不可晚於 date_to"}
 
         date_prefix = "ctl00$ctl00$ContentPlaceHolder1$RightContentPlaceHolder$"
         payload = dict(hidden)
@@ -1463,35 +1622,46 @@ class HttpSession:
         seen = {r["task_id"] for r in all_rows if r["task_id"]}
         kw = (keyword or "").strip().lower()
 
-        # 關鍵字模式要蒐齊全集才能過濾；無關鍵字也要翻到湊滿 max_results。
-        if kw or len(all_rows) < max_results:
-            cond = {k: v for k, v in payload.items()
-                    if k.startswith(date_prefix) and not k.endswith("wibQuery")}
-            grid = date_prefix + "grdQuery"
-            cur = resp2
-            for page in range(2, 40):   # backstop：至多 ~40 頁
-                if not kw and len(all_rows) >= max_results:
-                    break
-                h = _parse_hidden_fields(self._parse(cur))
-                h.update(cond)                         # pager postback 必須重帶條件欄位，否則伺服器用預設重繫結
-                h.pop(date_prefix + "wibQuery", None)  # 翻頁不按查詢鈕
-                h["__EVENTTARGET"] = grid
-                h["__EVENTARGUMENT"] = f"Page${page}"
-                cur = self.post(_FORM_QUERY_PATH, h)
-                if "Login.aspx" in str(cur.url) or "ErrorReport" in str(cur.url):
-                    break
-                new = [r for r in _parse_rows(self._parse(cur))
-                       if r["task_id"] and r["task_id"] not in seen]
-                if not new:
-                    break
-                seen.update(r["task_id"] for r in new)
-                all_rows.extend(new)
+        # UOF deployments have been observed ignoring the posted date controls. Keep the server
+        # filter for efficiency, but enforce the advertised date boundary locally as well.
+        def _in_range(row: dict) -> bool:
+            if query_mode != "apply":
+                return True
+            d = _uof_row_date(row, query_mode)
+            return d is not None and df_date <= d <= dt_date
 
+        cond = {k: v for k, v in payload.items()
+                if k.startswith(date_prefix) and not k.endswith("wibQuery")}
+        grid = date_prefix + "grdQuery"
+        cur = resp2
+        page_rows = all_rows
+        for page in range(2, 40):   # backstop：至多 ~40 頁
+            # Apply-query rows are rendered newest-first. Once a whole page is older than the
+            # lower bound, later pages cannot contribute a match. Sign-query ordering is less
+            # predictable, so it deliberately scans until the pager ends/backstop.
+            page_dates = [_uof_row_date(r, query_mode) for r in page_rows]
+            if (query_mode == "apply" and page_dates and all(
+                    d is not None and d < df_date for d in page_dates)):
+                break
+            h = _parse_hidden_fields(self._parse(cur))
+            h.update(cond)                         # pager postback 必須重帶條件欄位，否則伺服器用預設重繫結
+            h.pop(date_prefix + "wibQuery", None)  # 翻頁不按查詢鈕
+            h["__EVENTTARGET"] = grid
+            h["__EVENTARGUMENT"] = f"Page${page}"
+            cur = self.post(_FORM_QUERY_PATH, h)
+            if "Login.aspx" in str(cur.url) or "ErrorReport" in str(cur.url):
+                break
+            page_rows = [r for r in _parse_rows(self._parse(cur))
+                         if r["task_id"] and r["task_id"] not in seen]
+            if not page_rows:
+                break
+            seen.update(r["task_id"] for r in page_rows)
+            all_rows.extend(page_rows)
+
+        matched = [r for r in all_rows if _in_range(r)]
         if kw:
-            matched = [r for r in all_rows if kw in (
+            matched = [r for r in matched if kw in (
                 f"{r['form_number']} {r['form_name']} {r['subject']} {r['applicant']}").lower()]
-        else:
-            matched = all_rows
         rows = matched[:max_results]
         return {
             "ok": True,
@@ -1536,26 +1706,67 @@ class HttpSession:
 
     def dialog_options(self, form_version_id: str, field_code: str,
                        keyword: str = "", limit: int = 20) -> dict:
-        """Picker candidates for one dialog field of a form. {ok, reason, field, rows}."""
-        st = self.dialog_structure(form_version_id, field_code)
-        if not st.get("ok"):
-            return {"ok": False, "reason": st.get("reason", ""), "field": "", "rows": []}
-        if not st["fields"]:
-            return {"ok": False, "reason": f"找不到對話框欄位 {field_code}", "field": "", "rows": []}
-        f = st["fields"][0]
-        # dialog_structure only keeps the basename; re-resolve the full url here
+        """Picker candidates for a dialog field — block-level, or a nested row-editor picker.
+
+        {ok, reason, field, rows}. `field_code` may be a block dialog field code, or the id/name
+        of a lookup control inside a row editor (料號/科目 …). The nested picker's url is followed
+        from the DOM (surfaced by dialog_structure) — never hardcoded.
+        """
+        want = (field_code or "").upper()
+        # 1) Resolve a block-level picker from the apply page only. Do not call dialog_structure:
+        # that would open the block dialog and its row editors before list_dialog_options opens
+        # the picker again.
         fid, vid = self._resolve_form_ids(form_version_id)
+        if not fid:
+            return {"ok": False, "reason": f"無法對應表單 {form_version_id}", "field": "", "rows": []}
         resp = self.get(f"{_ADD_FORM_SCRIPT_PATH}?formId={fid}&formVersionId={vid}&mode=apply")
-        tree = self._parse(self.get(self.strip_vpath(str(resp.url))))
-        full = ""
-        for fb in _parse_field_blocks(tree, include_dialog_companions=True):
-            if (fb.get("code") or "").upper() == field_code.upper():
-                full = (fb.get("dialog_url") or "").replace("&amp;", "&")
-                break
-        if not full:
-            return {"ok": False, "reason": f"欄位 {field_code} 取不到查詢視窗位址", "field": f["label"], "rows": []}
-        return {"ok": True, "reason": "", "field": f"{f['label']}({f['code']})",
-                "rows": self.list_dialog_options(full, keyword, limit)}
+        if "Login.aspx" in str(resp.url):
+            return {"ok": False, "reason": "redirected to Login.aspx", "field": "", "rows": []}
+        apply_page = self.get(self.strip_vpath(str(resp.url)))
+        block = next((
+            fb for fb in _parse_field_blocks(
+                self._parse(apply_page),
+                include_dialog_companions=True,
+            )
+            if (fb.get("code") or "").upper() == want
+        ), None)
+        if block is not None:
+            full = (block.get("dialog_url") or "").replace("&amp;", "&")
+            if not full:
+                return {"ok": False, "reason": f"欄位 {field_code} 取不到查詢視窗位址",
+                        "field": block.get("label") or "", "rows": []}
+            return {"ok": True, "reason": "",
+                    "field": f"{block.get('label') or ''}({block.get('code') or field_code})",
+                    "rows": self.list_dialog_options(full, keyword, limit)}
+        # 2) A nested control has no top-level field code. Inspect blocks lazily and return as
+        # soon as the requested row-editor control is found.
+        nested = self.dialog_structure(form_version_id, nested_control=field_code)
+        if not nested.get("ok"):
+            return {"ok": False, "reason": nested.get("reason", ""), "field": "", "rows": []}
+        for f in nested["fields"]:
+            for red in f.get("row_editors", []):
+                for c in red.get("fields", []):
+                    ids = {(c.get("id") or "").upper(), (c.get("name") or "").upper()}
+                    if want in ids and want and c.get("picker_url"):
+                        return {"ok": True, "reason": "",
+                                "field": f"{c.get('label') or field_code}({field_code})",
+                                "rows": self.list_dialog_options(c["picker_url"], keyword, limit)}
+        return {"ok": False, "reason": f"找不到對話框欄位 {field_code}", "field": "", "rows": []}
+
+    def _dialog_opener_name(self, tree, dialog_url: str) -> tuple:
+        """Return the parent control that opens `dialog_url`.
+
+        The dialog callback posts this control back to append the confirmed row to its grid.
+        """
+        base = dialog_url.split("/")[-1].split("?")[0]
+        for el in tree.xpath("//input[@onclick] | //a[@onclick] | //button[@onclick]"):
+            if base in html.unescape(el.get("onclick") or ""):
+                return (
+                    el.get("name") or "",
+                    el.get("value") or "",
+                    (el.get("type") or "").lower() == "submit",
+                )
+        return ("", "", False)
 
     def add_plugin_dialog_rows(self, dialog_full_url: str, rows: list) -> dict:
         """Persist rows through a plugin row-editor dialog (PRItemDialog, ExpEmpItemDialog, …).
@@ -1585,8 +1796,9 @@ class HttpSession:
                 return {"ok": False, "added": added, "controls": controls,
                         "errors": errors + ["redirected to Login.aspx"]}
             tree = self._parse(r)
+            row_fields = _parse_dialog_fields(r.text)
             if not controls:
-                controls = [c["name"] for c in _parse_dialog_fields(r.text)]
+                controls = [c["name"] for c in row_fields]
                 if not controls:
                     return {"ok": False, "added": added, "controls": controls,
                             "errors": errors + ["對話框欄位解析失敗，無法驗證列內容"]}
@@ -1600,7 +1812,8 @@ class HttpSession:
             # 料號 stays blank no matter what is sent. Which picker feeds which button is form
             # knowledge and comes from the caller.
             fields = dict(row)
-            fields.pop("_press_after", None)
+            presses = fields.pop("_press_after", None) or []
+            presses_last = fields.pop("_press_last", None) or []
             # `_fill_before` values ride along with every lookup post. Ordering is the point: a
             # control that drives another (分類 drives 費用項目) must be submitted *with* the
             # lookup, so ASP.NET raises its changed-event first and the button click fills the
@@ -1611,31 +1824,22 @@ class HttpSession:
             if bad_prefill:
                 errors.append(f"第 {ri + 1} 列的 _fill_before 控制項名稱不存在：{bad_prefill}")
                 continue
-            for lk in (fields.pop("_lookups", None) or []):
-                press = (lk or {}).get("press") or ""
-                picked = (lk or {}).get("row")
-                if not press or picked is None:
-                    errors.append(f"第 {ri + 1} 列的 _lookups 需要 press 與 row 兩個欄位")
-                    break
-                lp = _form_state_payload(tree)
-                for pk, pv in prefill.items():
-                    perr = _fill_control_value(lp, tree, short.get(pk, pk), pv)
-                    if perr:
-                        notes.append(f"第 {ri + 1} 列：_fill_before 的 {pk} {perr}")
-                lp["DialogReturnValue"] = (picked if isinstance(picked, str)
-                                           else _json.dumps(picked, ensure_ascii=False))
-                _trigger(lp, tree, press)
-                rl = self.post(path, lp, retry_on_login=False)
-                tree = self._parse(rl)
-            payload = _form_state_payload(tree)
+            lookups = fields.pop("_lookups", None) or []
             unknown = [k for k in fields if k not in short and k not in controls]
             if unknown:
                 errors.append(f"第 {ri + 1} 列的控制項名稱不存在：{unknown}；"
                               f"有效名稱：{'／'.join(sorted(short)[:20])}")
                 continue
-            if not any(str(v).strip() for v in fields.values()) and not row.get("_lookups"):
+            if not any(str(v).strip() for v in fields.values()) and not lookups:
                 errors.append(f"第 {ri + 1} 列沒有任何值，未送出")
                 continue
+            # Plain fields first (what `_press_after` computes from), THEN `_press_after` (計算
+            # etc.), THEN `_lookups`, and finally optional `_press_last`. A calc button's postback
+            # re-renders the whole row from the server's own state and was observed to blank
+            # picker-derived read-only columns (帳號/內部 Id) set by an *earlier* lookup — so
+            # lookup must follow those calculations. `_press_last` is the explicit escape hatch
+            # for a button that instead consumes the lookup-populated values.
+            payload = _form_state_payload(tree)
             bad_field = False
             for k, v in fields.items():
                 err = _fill_control_value(payload, tree, short.get(k, k), v)
@@ -1647,14 +1851,53 @@ class HttpSession:
                     break
             if bad_field:
                 continue
-            # `_press_after` runs buttons that derive values from what was just typed (計算 etc.),
-            # so it has to happen after the fill, unlike `_lookups`.
-            for press in (row.get("_press_after") or []):
+            for press in presses:
                 cp = dict(payload)
                 _trigger(cp, tree, press)
                 rc = self.post(path, cp, retry_on_login=False)
                 tree = self._parse(rc)
                 payload = _form_state_payload(tree)
+            for lk in lookups:
+                press = (lk or {}).get("press") or ""
+                picked = (lk or {}).get("row")
+                if not press or picked is None:
+                    errors.append(f"第 {ri + 1} 列的 _lookups 需要 press 與 row 兩個欄位")
+                    bad_field = True
+                    break
+                lp = dict(payload)
+                for pk, pv in prefill.items():
+                    perr = _fill_control_value(lp, tree, short.get(pk, pk), pv)
+                    if perr:
+                        notes.append(f"第 {ri + 1} 列：_fill_before 的 {pk} {perr}")
+                lp["DialogReturnValue"] = (picked if isinstance(picked, str)
+                                           else _json.dumps(picked, ensure_ascii=False))
+                _trigger(lp, tree, press)
+                rl = self.post(path, lp, retry_on_login=False)
+                tree = self._parse(rl)
+                payload = _form_state_payload(tree)
+            if bad_field:
+                continue
+            for press in presses_last:
+                cp = dict(payload)
+                _trigger(cp, tree, press)
+                rc = self.post(path, cp, retry_on_login=False)
+                if "Login.aspx" in str(rc.url):
+                    errors.append(f"第 {ri + 1} 列按下 {press} 時 session 已過期，請重試")
+                    bad_field = True
+                    break
+                tree = self._parse(rc)
+                payload = _form_state_payload(tree)
+            if bad_field:
+                continue
+            missing = _missing_required_dialog_fields(row_fields, payload)
+            if missing:
+                desc = "、".join(
+                    f"{c.get('label') or c.get('id') or c['name'].split('$')[-1]}"
+                    f"（{c.get('id') or c['name'].split('$')[-1]}）"
+                    for c in missing
+                )
+                errors.append(f"第 {ri + 1} 列的必填控制項未提供：{desc}，該列未送出")
+                continue
             payload["__EVENTTARGET"] = "ctl00$MasterPageRadButton1"
             payload["__EVENTARGUMENT"] = ""
             payload["FASTReturnValue"] = "[DefaultNullValue]"
@@ -1671,9 +1914,11 @@ class HttpSession:
             # detail grid was empty. Never count a row without evidence it persisted.
             trv = _temp_return_value(resp.text)
             if trv is None:
+                why = _dialog_reject_reason(resp.text)
                 errors.append(
                     f"第 {ri + 1} 列：確定後對話框未回傳列資料，該列未被接受"
-                    "（常見原因：查找型欄位只填了代碼、沒帶內部 Id）")
+                    + (f"——{why}" if why
+                       else "（常見原因：查找型欄位只填了代碼、沒帶內部 Id）"))
                 continue
             returned.append(trv if isinstance(trv, str) else _json.dumps(trv, ensure_ascii=False))
             added += 1
@@ -2077,17 +2322,17 @@ class HttpSession:
                     _mark_filled(filled, code, fb, payload[iname])
 
             elif itype == "checkbox":
-                # An ASP.NET CheckBox posts its name only when ticked; the value is irrelevant.
-                # Assigning str(value) therefore *ticked* the box whatever was passed — including
-                # 「否」/False — and there was no way to express unticked at all.
                 opts = fb.get("options") or []
-                on = str(value).strip().lower() not in (
-                    "", "false", "0", "no", "n", "否", "未", "unchecked")
+                on, post_value, checkbox_error = _resolve_checkbox_value(opts, value)
+                if checkbox_error:
+                    blocking.append(f"欄位「{fb.get('label') or code}」的{checkbox_error}")
+                    bad_option_codes.add(fb.get("code") or "")
+                    continue
                 if on:
-                    payload[iname] = (opts[0]["value"] if opts else "on")
+                    payload[iname] = post_value
                 else:
                     payload.pop(iname, None)
-                _mark_filled(filled, code, fb, "已勾選" if on else "未勾選")
+                _mark_filled(filled, code, fb, post_value if on else "未勾選")
 
             elif itype == "dialog" or isinstance(value, (dict, list, tuple)):
                 # A structured value addresses a plugin block even when the block was inferred as
@@ -2095,8 +2340,9 @@ class HttpSession:
                 dialog_url = fb.get("dialog_url") or ""
                 # A plugin block can carry its own controls and one or more row grids. A dict
                 # addresses the block itself:
-                # `_lookups` / `_press_after` / `_rows` are reserved, every other key is a control
-                # name inside the block. Which control means what is form knowledge — not MCP's.
+                # `_lookups` / `_press_after` / `_press_last` / `_rows` are reserved, every other
+                # key is a control name inside the block. Which control means what is form
+                # knowledge — not MCP's.
                 if isinstance(value, dict):
                     inline = dict(value)
                     rows_v = inline.pop("_rows", None)
@@ -2106,8 +2352,9 @@ class HttpSession:
                     names = {n.split("$")[-1]: n for n in (
                         e.get("name") for e in
                         tree2.xpath("//input[@name]|//select[@name]|//textarea[@name]"))
-                        if n and (not ucp or ucp in n)}
+                        if n and (not ucp or _matches_uc_prefix(n, ucp))}
                     presses = inline.pop("_press_after", None) or []
+                    presses_last = inline.pop("_press_last", None) or []
                     # Controls consumed by a lookup must be posted with the button press, not after it.
                     prefill_i = inline.pop("_fill_before", None) or {}
                     bad_inline = False
@@ -2115,50 +2362,18 @@ class HttpSession:
                         if pk not in names:
                             blocking.append(f"欄位「{label_}」區塊內無控制項 {pk}（_fill_before）")
                             bad_inline = True
-                    for lk in ([] if bad_inline else (inline.pop("_lookups", None) or [])):
-                        press, picked = (lk or {}).get("press"), (lk or {}).get("row")
-                        if not press or picked is None:
-                            blocking.append(f"欄位「{label_}」的 _lookups 每項需要 press 與 row")
-                            bad_inline = True
-                            break
-                        # same DialogReturnValue protocol as the row editor, one layer up: the
-                        # server owns the read-only columns, so posting their text does nothing
-                        pp = dict(payload)
-                        for pk, pv in prefill_i.items():
-                            perr = _fill_control_value(pp, tree2, names[pk], pv)
-                            if perr:
-                                blocking.append(f"欄位「{label_}」的 _fill_before {pk} {perr}")
-                                bad_inline = True
-                        pp["DialogReturnValue"] = (picked if isinstance(picked, str)
-                                                   else json.dumps(picked, ensure_ascii=False))
-                        _trigger_control(pp, tree2, press)
-                        before = {k: v for k, v in payload.items() if not ucp or ucp in k}
-                        lookup_resp = self.post(first_site_path, pp, retry_on_login=False)
-                        if "Login.aspx" in str(lookup_resp.url):
-                            blocking.append(f"欄位「{label_}」lookup 時 session 已過期，請重試")
-                            bad_inline = True
-                            break
-                        tree2 = self._parse(lookup_resp)
-                        # Take the whole rendered state back, not just the hiddens: the columns
-                        # the server just filled are ordinary inputs, and keeping the pre-lookup
-                        # payload would post the empty values straight back over them at 儲存.
-                        payload.update(_form_state_payload(tree2))
-                        # A row the server cannot resolve is accepted without complaint: the id
-                        # lands but the display column stays blank, and the form submits looking
-                        # filled. Require the block to have actually changed.
-                        after = {k: v for k, v in _form_state_payload(tree2).items()
-                                 if not ucp or ucp in k}
-                        if before and after == before:
-                            blocking.append(
-                                f"欄位「{label_}」按下 {press} 後區塊沒有任何變化——"
-                                f"伺服器無法解析所選項目，請換一筆")
-                            bad_inline = True
-                            break
+                    lookups_i = [] if bad_inline else (inline.pop("_lookups", None) or [])
                     unknown = [k for k in inline if k not in names]
                     if unknown and not bad_inline:
                         blocking.append(f"欄位「{label_}」區塊內無這些控制項：{unknown}；"
                                         f"有效名稱：{'／'.join(sorted(names)[:20])}")
                         bad_inline = True
+                    # Plain fields first (what `_press_after` computes from), THEN `_press_after`
+                    # (計算 etc.), THEN `_lookups`, and finally optional `_press_last`. A calc
+                    # button's postback re-renders the
+                    # whole block from the server's own state and was observed to blank
+                    # picker-derived read-only columns set by an *earlier* lookup, so lookup must
+                    # follow those calculations. `_press_last` is only for consumers of lookup.
                     if not bad_inline:
                         for k, v in inline.items():
                             err = _fill_control_value(payload, tree2, names[k], v)
@@ -2175,6 +2390,70 @@ class HttpSession:
                                 break
                             tree2 = self._parse(press_resp)
                             payload.update(_form_state_payload(tree2))
+                    for lk in ([] if bad_inline else lookups_i):
+                        press, picked = (lk or {}).get("press"), (lk or {}).get("row")
+                        if not press or picked is None:
+                            blocking.append(f"欄位「{label_}」的 _lookups 每項需要 press 與 row")
+                            bad_inline = True
+                            break
+                        # same DialogReturnValue protocol as the row editor, one layer up: the
+                        # server owns the read-only columns, so posting their text does nothing
+                        pp = dict(payload)
+                        for pk, pv in prefill_i.items():
+                            perr = _fill_control_value(pp, tree2, names[pk], pv)
+                            if perr:
+                                blocking.append(f"欄位「{label_}」的 _fill_before {pk} {perr}")
+                                bad_inline = True
+                        pp["DialogReturnValue"] = (picked if isinstance(picked, str)
+                                                   else json.dumps(picked, ensure_ascii=False))
+                        _trigger_control(pp, tree2, press)
+                        before = {
+                            k: v for k, v in payload.items()
+                            if not ucp or _matches_uc_prefix(k, ucp)
+                        }
+                        lookup_resp = self.post(first_site_path, pp, retry_on_login=False)
+                        if "Login.aspx" in str(lookup_resp.url):
+                            blocking.append(f"欄位「{label_}」lookup 時 session 已過期，請重試")
+                            bad_inline = True
+                            break
+                        tree2 = self._parse(lookup_resp)
+                        # Take the whole rendered state back, not just the hiddens: the columns
+                        # the server just filled are ordinary inputs, and keeping the pre-lookup
+                        # payload would post the empty values straight back over them at 儲存.
+                        payload.update(_form_state_payload(tree2))
+                        # A row the server cannot resolve is accepted without complaint: the id
+                        # lands but the display column stays blank, and the form submits looking
+                        # filled. Require the block to have actually changed.
+                        after = {k: v for k, v in _form_state_payload(tree2).items()
+                                 if not ucp or _matches_uc_prefix(k, ucp)}
+                        if before and after == before:
+                            blocking.append(
+                                f"欄位「{label_}」按下 {press} 後區塊沒有任何變化——"
+                                f"伺服器無法解析所選項目，請換一筆")
+                            bad_inline = True
+                            break
+                    for press in ([] if bad_inline else presses_last):
+                        pp = dict(payload)
+                        _trigger_control(pp, tree2, press)
+                        press_resp = self.post(first_site_path, pp, retry_on_login=False)
+                        if "Login.aspx" in str(press_resp.url):
+                            blocking.append(f"欄位「{label_}」按下 {press} 時 session 已過期，請重試")
+                            bad_inline = True
+                            break
+                        tree2 = self._parse(press_resp)
+                        payload.update(_form_state_payload(tree2))
+                    # A dict addressing the block (e.g. to fill `_rows`) marks the whole block
+                    # filled even when the block's OWN required controls (付款人 …) were never
+                    # touched — the block has content, just not in the field the server checks.
+                    # Re-derive them the same way dialog_structure does and catch anything still
+                    # empty, or a required signer/payee silently ships blank.
+                    if not bad_inline and ucp:
+                        for c in _missing_required_controls(tree2, ucp, payload):
+                            control_id = c.get("id") or "?"
+                            blocking.append(
+                                f"欄位「{label_}」內的必填控制項「{c.get('label') or control_id}」"
+                                f"（{control_id}）未提供")
+                            bad_inline = True
                     if bad_inline:
                         continue
                     _mark_filled(filled, code, fb, "、".join(f"{k}={v}" for k, v in inline.items()) or "已選取")
@@ -2487,11 +2766,18 @@ class HttpSession:
             })
         return results
 
-    def dialog_structure(self, form_version_id: str, field_code: str = "") -> dict:
+    def dialog_structure(
+        self,
+        form_version_id: str,
+        field_code: str = "",
+        *,
+        nested_control: str = "",
+    ) -> dict:
         """Inner field structure of a form's dialog-backed fields.
 
         Opens the apply page, finds each dialog field's own page and parses it as a mini-form.
-        `field_code` empty ⇒ every dialog field on the form.
+        `field_code` empty ⇒ every dialog field on the form. `nested_control` asks for the first
+        block containing that row-editor control and stops further dialog fetches.
 
         Returns {ok, reason, fields: [{code, label, dialog, inner: [...]}]}.
         """
@@ -2504,6 +2790,7 @@ class HttpSession:
         first = self.get(self.strip_vpath(str(resp.url)))
         tree = self._parse(first)
         want = (field_code or "").upper()
+        nested_want = (nested_control or "").upper()
         out = []
         for fb in _parse_field_blocks(tree, include_dialog_companions=True):
             if fb.get("input_type") != "dialog":
@@ -2513,28 +2800,87 @@ class HttpSession:
                 continue
             url = (fb.get("dialog_url") or "").replace("&amp;", "&")
             entry = {"code": code, "label": fb.get("label") or "", "dialog": url.split("/")[-1][:60],
-                     "inner": [], "inline": [], "row_editor": "", "note": ""}
+                     "dialog_url": url, "inner": [], "inline": [], "row_editor": "",
+                     "press": "", "note": ""}
+            # The button that opens this block's dialog. Callers need its name to press it
+            # (`_lookups`), and it is knowable from the DOM — leaving it out forced every form's
+            # skill to hardcode one.
+            entry["press"] = (self._dialog_opener_name(tree, url)[0] or "").split("$")[-1] if url else ""
             # Plugin forms render their real controls inline inside the field's own
             # versionFieldUC block; _parse_field_blocks only reports the block itself, so those
             # controls (付款人 / 立帳日期 / 金額 …) are invisible without this.
             m_uc = re.search(r"(versionFieldUC\d+)", fb.get("input_name") or "")
             if m_uc:
                 entry["inline"] = _parse_inline_controls(tree, m_uc.group(1))
-            # A row-editor dialog on the page (ExpEmpItemDialog…) means this field owns detail rows.
-            for u in set(re.findall(r"['\"]([^'\"]*ItemDialog\.aspx[^'\"]*)['\"]", first.text)):
-                entry["row_editor"] = u.replace("&amp;", "&")
-                break
+            # A dialog carrying GridDataID *is* this block's row editor, rather than a picker
+            # sitting beside one. Both shapes exist; report either as a row editor so callers get
+            # the opener button and the row's own nested pickers the same way.
+            block_is_row_editor = bool(url) and "GridDataID" in url
             if not url:
                 entry["note"] = "取不到對話框位址"
             else:
                 try:
                     d = self.get(self.strip_vpath(url if url.startswith("/") else "/" + url))
                     inner = _parse_datagrid_columns(d.text) or _parse_dialog_fields(d.text)
-                    entry["inner"] = inner
                     if not inner:
                         entry["note"] = "對話框內容無法解析（版型未知）"
+                    if block_is_row_editor:
+                        red = {"open_button": entry["press"],
+                               "dialog": (entry["dialog"] or "").split("?")[0],
+                               "fields": [], "note": entry["note"]}
+                        for c in inner:
+                            pd = ""
+                            for bt in (c.get("lookup_buttons") or []):
+                                pd = _lookup_dialog_target(d.text, bt)
+                                if pd:
+                                    break
+                            c["picker_dialog"] = pd.split("/")[-1].split("?")[0] if pd else ""
+                            c["picker_url"] = pd
+                            red["fields"].append(c)
+                        entry.setdefault("row_editors", []).append(red)
+                    else:
+                        entry["inner"] = inner
                 except Exception as ex:
                     entry["note"] = f"讀取對話框失敗：{type(ex).__name__}: {ex}"
+            # Detail-row editors this block owns (add-row buttons on the apply page). Parse each
+            # editor's controls; if a control itself opens a picker, capture that nested picker's
+            # dialog so it can be queried. All read from the DOM — no form/dialog name hardcoded.
+            main_base = (entry["dialog"] or "").split("?")[0]
+            for ed in _find_row_editor_openers(
+                first.text,
+                {main_base},
+                m_uc.group(1) if m_uc else "",
+            ):
+                red = {"open_button": ed["open_button"], "dialog": ed["basename"], "fields": [], "note": ""}
+                try:
+                    edoc = self.get(self.strip_vpath(ed["url"] if ed["url"].startswith("/") else "/" + ed["url"]))
+                    for c in _parse_dialog_fields(edoc.text):
+                        pd = ""
+                        for b in (c.get("lookup_buttons") or []):
+                            pd = _lookup_dialog_target(edoc.text, b)
+                            if pd:
+                                break
+                        c["picker_dialog"] = pd.split("/")[-1].split("?")[0] if pd else ""
+                        c["picker_url"] = pd
+                        red["fields"].append(c)
+                except Exception as ex:
+                    red["note"] = f"讀取列編輯器失敗：{type(ex).__name__}: {ex}"
+                # An "editor" with no fillable controls (attachment/file-center dialogs) is not a
+                # detail-row grid — skip it so only real detail editors surface.
+                if red["fields"]:
+                    entry.setdefault("row_editors", []).append(red)
+            if nested_want:
+                found = any(
+                    nested_want in {
+                        (c.get("id") or "").upper(),
+                        (c.get("name") or "").upper(),
+                    }
+                    for red in entry.get("row_editors", [])
+                    for c in red.get("fields", [])
+                )
+                if found:
+                    return {"ok": True, "reason": "", "fields": [entry]}
+                continue
             out.append(entry)
         return {"ok": True, "reason": "", "fields": out}
 
@@ -3123,14 +3469,41 @@ class HttpWebBackend(OpsBackend):
 
         lines = [f"🗂 對話框欄位結構（{len(d['fields'])} 個）："]
         for f in d["fields"]:
-            lines.append(f"\n▸ {f['label']}({f['code']})　挑選器: {f['dialog'] or '(未知)'}")
+            press = f.get("press") or ""
+            hint = (f"　開窗鈕 {press}（用 _lookups[{{press:{press}, row:選中項}}]）"
+                    if press and not f.get("row_editors") else
+                    f"　開列鈕 {press}" if press else "")
+            lines.append(f"\n▸ {f['label']}({f['code']})　挑選器: {f['dialog'] or '(未知)'}{hint}")
             if f["note"]:
                 lines.append(f"   ⚠️ {f['note']}")
             if f.get("inline"):
                 lines.append(f"   ── 欄位區塊內的控制項（{len(f['inline'])}）──")
                 lines += _render(f["inline"], "   ")
-            if f.get("row_editor"):
-                lines.append(f"   ── 明細列編輯器: {f['row_editor'].split('/')[-1][:50]} ──")
+            for red in (f.get("row_editors") or []):
+                lines.append(f"   ── 明細列編輯器: {red['dialog']}（開列鈕 {red['open_button']}；用 _rows 帶列）──")
+                if red.get("note"):
+                    lines.append(f"      ⚠️ {red['note']}")
+                for c in red["fields"]:
+                    mark = "＊" if c.get("required") else " "
+                    flags = "".join(["[唯讀]" if c.get("readonly") else "", "[隱藏]" if c.get("hidden") else ""])
+                    nm = c.get("id") or c.get("name") or "?"
+                    lb = [x for x in (c.get("lookup_buttons") or []) if x]
+                    if c.get("picker_dialog"):
+                        # a lookup column: query candidates + replay the pick inside the row
+                        press = lb[0] if lb else "?"
+                        extra = (f"（picker: {c['picker_dialog']}；查候選用 search_dialog_options，"
+                                 f"填列時把選中項放進該列的 _lookups[{{press:{press}, row:選中項}}]）")
+                    elif lb:
+                        # no dialog behind the button → a calc/derive action, run after fill
+                        extra = f"（動作鈕 {', '.join(lb)}：填列時放進該列的 _press_after）"
+                    else:
+                        extra = ""
+                    lines.append(f"      {mark}{c.get('label') or '(無標籤)'} → {nm} 〈{c.get('type', '?')}〉{flags}{extra}")
+                    opts = c.get("options") or []
+                    if opts:
+                        shown = "／".join(f"{o['value']}={o['text']}" for o in opts[:12] if o["text"])
+                        more = f" …共 {len(opts)} 項" if len(opts) > 12 else ""
+                        lines.append(f"         可選值(值=顯示): {shown}{more}")
             if f["inner"]:
                 lines.append(f"   ── 挑選器/列編輯器內欄位（{len(f['inner'])}）──")
             for c in f["inner"]:
@@ -3149,6 +3522,12 @@ class HttpWebBackend(OpsBackend):
                 if c.get("lookup_buttons"):
                     lines.append(f"      查找鈕: {', '.join(c['lookup_buttons'])}")
         lines.append("\n💡 同一標籤下可能有多個控制項（含隱藏輔助欄）；要填哪一個由表單的 skill 判斷。")
+        # Some blocks only render their detail editor after their picker is chosen, so a structure
+        # read on the blank page cannot show it. Say so rather than let it read as "no detail".
+        if any(f.get("press") for f in d["fields"]) and not any(f.get("row_editors") for f in d["fields"]):
+            lines.append("💡 這裡沒列出明細列編輯器：有些表單要先按開窗鈕選定主資料（如供應商）後，"
+                         "明細區塊才會出現。apply_form 帶 `_lookups` 時會自動先選再填明細；"
+                         "若該表單確實有明細，請照該表單 skill 的順序帶。")
         return "\n".join(lines)
 
     def search_dialog_options(self, form_version_id: str, field_code: str,
@@ -3168,7 +3547,13 @@ class HttpWebBackend(OpsBackend):
             shown = {k: v for k, v in r.items() if v not in (None, "", 0) and not k.startswith("_")}
             head = " ｜ ".join(f"{k}={v}" for k, v in list(shown.items())[:6])
             lines.append(f"  [{i}] {head}")
+            # The picked entity must go back to the dialog *whole*: the server reads its own keys
+            # (internal Id included) off this object. A hand-rebuilt subset drops keys the confirm
+            # needs and the row is silently rejected — so hand back the exact JSON to paste as-is.
+            lines.append(f"      row={json.dumps({k: v for k, v in r.items() if not k.startswith('_')}, ensure_ascii=False)}")
         lines.append("\n⚠️ 不要盲選第一筆：請確認代碼精確相符或名稱可信，必要時回問使用者。")
+        lines.append("👉 選定後，把該筆整個 row=… 的 JSON 原樣放進明細列的 "
+                     "_lookups[{press:<開窗鈕，如 btnExpense>, row:<此 JSON>}]；不要自行改寫或只挑幾個鍵。")
         return "\n".join(lines)
 
     def operate_dialog(self, form_version_id: str, field_code: str,
@@ -3340,7 +3725,7 @@ class HttpWebBackend(OpsBackend):
             return f"❌ 查詢失敗：{result.get('reason', '(unknown)')}"
         rows = result["rows"]
         q = result["query"]
-        # keyword 時 total_matched＝過濾後命中數；無 keyword 時沿用掃到的列數
+        # total_matched 已套用日期邊界與 keyword；不是抓取列數或頁面大小。
         total = result.get("total_matched", result.get("total_scanned", len(rows)))
         header = (
             f"🔍 查詢表單 —"

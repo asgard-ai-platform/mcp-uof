@@ -82,18 +82,10 @@ session 中途失效（被重導回 `Login.aspx`）走同一套：能自動重�
 > 存檔內容是**可重放的 session cookie，等同登入態**。請比照密碼保護：不要複製到其他機器、
 > 不要放進版控或備份。要撤銷就呼叫 `uof_custom_logout`（或直接刪掉該檔案）。
 
-## 測試專用變數（tests/）
+## Mounted 測試
 
-| Variable | Description |
-| --- | --- |
-| `UOF_ACCOUNT_USER1` | 具測試清理權限的帳號 |
-| `UOF_ACCOUNT_USER2` | 測試簽核帳號 |
-| `UOF_ACCOUNT_USER3` | 測試申請帳號 |
-| `UOF_TEST_WORKFLOW_FORM_NAME` | mounted 工作流程用的原生表單名（留空則該情境自動 skip） |
-| `UOF_TEST_WORKFLOW_FIELDS` | 該隔離測試表單的 `fields` JSON；只放在未追蹤的 `.env` |
-| `UOF_TEST_WORKFLOW_MEMO_FIELD` | 寫入每次測試識別文字的欄位 ID |
-
-`tests/mounted/` 需要無人值守登入，因此**必須**設定 `UOF_ACCOUNT` / `UOF_PASSWORD`（測試帳號共用 `UOF_PASSWORD`）。
+`tests/mounted/` 使用 `UOF_BASE_URL`、`UOF_ACCOUNT`、`UOF_PASSWORD` 做單一身份的無人值守登入，
+只驗證真實 stdio 掛載、認證與唯讀查詢，不需要部署端表單 schema，也不建立或異動表單。
 
 > 為保護明文密碼，建議將 `.env` 權限設為僅擁有者可讀寫（`chmod 600 .env`）。
 
