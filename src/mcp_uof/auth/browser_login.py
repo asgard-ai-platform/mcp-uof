@@ -13,13 +13,14 @@ client 發出，`Set-Cookie` 自然落在我們的 cookie jar，也不會踩到 
 from __future__ import annotations
 
 import os
+import posixpath
 import secrets
 import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote, unquote_plus, urlparse
 
 from .._log import eprint as _eprint
 
@@ -313,6 +314,9 @@ def _make_handler(flow: BrowserLoginFlow):
             if path == "/favicon.ico":
                 return self._send_simple(404, "")
 
+            if not self._path_is_allowed(path):
+                return self._send_simple(403, "forbidden — path outside configured UOF virtual path")
+
             self._proxy(method, path, query, body)
 
         # ── 代理本體 ────────────────────────────────────────────
@@ -404,6 +408,23 @@ def _make_handler(flow: BrowserLoginFlow):
                 return "/", ""
             path, _, query = raw.partition("?")
             return path, query
+
+        def _path_is_allowed(self, path: str) -> bool:
+            """只代理 configured UOF virtual path；完成頁/favicon 已在呼叫前個別處理。"""
+            vpath = session._vpath
+            if not vpath:
+                return path.startswith("/")
+            # IIS/ASP.NET 可能把反斜線視為 path separator，也可能在不同層各 decode 一次；
+            # allowlist 前先 canonicalize，避免 `%5c` / double-encoded `..` 逃出 virtual path。
+            decoded = path
+            for _ in range(3):
+                expanded = unquote(decoded)
+                if expanded == decoded:
+                    break
+                decoded = expanded
+            decoded = decoded.replace("\\", "/")
+            normalized = posixpath.normpath(decoded)
+            return normalized == vpath or normalized.startswith(vpath + "/")
 
         def _token_from_query(self, query: str):
             for part in query.split("&"):

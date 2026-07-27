@@ -70,12 +70,17 @@ def main() -> int:
     dir_mode = stat.S_IMODE(store.credentials_dir().stat().st_mode)
     failures += _common.check("~/.uof 目錄權限 0700", dir_mode == 0o700, oct(dir_mode))
 
-    # ── 3) 權限被放寬時要自動修回（並仍可載入）──────────────────────
+    # ── 3) 權限被放寬時要修回，但既有內容視為可能遭竄改、不得載入 ─────
     os.chmod(path, 0o644)
     fixer = httpx.Client()
-    store.load_session(fixer)
+    meta = store.load_session(fixer)
     mode = stat.S_IMODE(Path(path).stat().st_mode)
     failures += _common.check("權限過寬會自動改回 0600", mode == 0o600, oct(mode))
+    failures += _common.check(
+        "權限曾過寬的 session 本次拒絕載入",
+        meta is None and not list(fixer.cookies.jar),
+        f"meta={meta}, cookies={list(fixer.cookies.jar)}",
+    )
 
     # ── 4) 身份隔離：換帳號不得載到別人的 session ────────────────────
     # mounted 測試三個帳號共用同一個 HOME，這條錯了會變成拿別人身份操作。
@@ -189,7 +194,7 @@ def _identity_resolution() -> int:
     c = httpx.Client()
     meta = store.load_session(c)
     failures += _common.check("UOF_SESSION_NAMESPACE 明確定位到該身份",
-                              (meta or {}).get("account") == "bob"
+                              (meta or {}).get("actual_account") == "bob"
                               and {x.value for x in c.cookies.jar} == {"bob-sess"},
                               str(meta))
     os.environ.pop("UOF_SESSION_NAMESPACE")
@@ -230,9 +235,34 @@ def _namespace_path_consistency() -> int:
                                   and {x.value for x in c.cookies.jar} == {"alice-sess"},
                                   str(meta))
         failures += _common.check("payload 仍記錄實際登入帳號 alice 供顯示",
-                                  (meta or {}).get("account") == "alice", str(meta))
+                                  (meta or {}).get("actual_account") == "alice", str(meta))
     finally:
         os.environ.pop("UOF_SESSION_NAMESPACE", None)
+
+    # storage key 只負責定位檔案，絕對不能在無法擷取瀏覽器帳號時冒充 actual account。
+    os.environ["UOF_SESSION_NAMESPACE"] = "entry-unknown"
+    os.environ["UOF_ACCOUNT"] = "configured-carol"
+    try:
+        store.save_session(_client_with("s", "unknown-sess"), account="", source="browser")
+        c = httpx.Client()
+        meta = store.load_session(c)
+        failures += _common.check(
+            "無法辨識瀏覽器帳號時 metadata 不拿 namespace/UOF_ACCOUNT 冒充",
+            meta is not None
+            and meta.get("storage_key") == "entry-unknown"
+            and meta.get("actual_account") == "",
+            str(meta),
+        )
+        from mcp_uof.ops.http_web import HttpSession
+        session = HttpSession()
+        failures += _common.check(
+            "重啟載入未知身份 session 時仍維持未辨識",
+            session.session_account == "",
+            repr(session.session_account),
+        )
+    finally:
+        os.environ.pop("UOF_SESSION_NAMESPACE", None)
+        os.environ.pop("UOF_ACCOUNT", None)
 
     # _safe_name：有損字元不同的帳號不得撞同一檔名；一般 ASCII 帳號維持穩定（不加雜湊）。
     failures += _common.check("_safe_name 對有損字元不同的帳號不撞檔名",
@@ -257,12 +287,24 @@ def _directory_hardening() -> int:
     os.chmod(loose, 0o777)
     os.environ["UOF_SESSION_DIR"] = str(loose)
     store.save_session(_client_with("s", "v"), account="erin")
+    saved = store.session_path(account="erin")
     mode = stat.S_IMODE(loose.stat().st_mode)
     failures += _common.check("既有目錄權限過寬會被收緊為 0700", mode == 0o700, oct(mode))
 
     # 暫存檔不得殘留（也不得使用可預測的名稱）
     leftovers = list(loose.glob("*.tmp"))
     failures += _common.check("寫入後沒有殘留暫存檔", not leftovers, str(leftovers))
+
+    # load 也必須先驗目錄；不能只有 save 才收緊。session file 保持 0600，避免檔案 mode
+    # 本身的修正剛好掩蓋「讀取前沒檢查目錄」。
+    os.chmod(loose, 0o777)
+    loaded = httpx.Client()
+    meta = store.load_session(loaded, account="erin")
+    failures += _common.check(
+        "load_session 讀取前會先收緊 session 目錄",
+        meta is not None and stat.S_IMODE(loose.stat().st_mode) == 0o700,
+        f"meta={meta}, mode={oct(stat.S_IMODE(loose.stat().st_mode))}",
+    )
 
     # 目錄屬於別人 → 拒絕存放（模擬不同 uid）
     real_getuid = os.getuid
@@ -277,9 +319,31 @@ def _directory_hardening() -> int:
                                   isinstance(raised, store.SessionDirUnsafe), repr(raised))
         failures += _common.check("目錄非本人所有 → save_session 安全放棄（不拋例外）",
                                   store.save_session(_client_with("s", "v")) is None)
+        failures += _common.check(
+            "目錄非本人所有 → load_session 也拒絕讀取",
+            store.load_session(httpx.Client(), account="erin") is None,
+        )
     finally:
         os.getuid = real_getuid
-        os.environ.pop("UOF_SESSION_DIR")
+
+    # session file symlink 即使指向可讀的有效 JSON 也不得跟隨。
+    real_file = loose / "real-session.json"
+    saved.replace(real_file)
+    saved.symlink_to(real_file)
+    failures += _common.check(
+        "load_session 拒絕 session file symlink",
+        store.load_session(httpx.Client(), account="erin") is None,
+    )
+
+    # 整個 session directory 也不可為 symlink。
+    linked_dir = Path(home) / "linked-dir"
+    linked_dir.symlink_to(loose, target_is_directory=True)
+    os.environ["UOF_SESSION_DIR"] = str(linked_dir)
+    failures += _common.check(
+        "load_session 拒絕 symlink session 目錄",
+        store.load_session(httpx.Client(), account="erin") is None,
+    )
+    os.environ.pop("UOF_SESSION_DIR")
     return failures
 
 

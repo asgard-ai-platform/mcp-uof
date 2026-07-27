@@ -34,12 +34,18 @@ class SessionAuthProvider(AuthProvider):
     # ── AuthProvider surface ────────────────────────────────────────
     def ensure_valid(self) -> None:
         """Verify or re-establish the httpx session (login if cookie expired)."""
+        from ..ops.http_web import get_http_session
+        session = get_http_session()
+        # browser login pending 必須優先於 30 秒 validation cache；否則 force 換身份剛清完
+        # cookie 時，舊身份留下的 cache 會讓受保護工具略過認證閘。
+        if session.session_source == "browser_pending":
+            from .base import BrowserLoginRequired
+            raise BrowserLoginRequired("瀏覽器登入仍在等待使用者完成")
         # Avoid hammering the server: re-validate at most once per 30s.
         if time.time() - self._last_validated < 30 and self._identity_cached == self._identity_key():
             return
         self._validate_env()
-        from ..ops.http_web import get_http_session
-        get_http_session()._ensure_logged_in()
+        session._ensure_logged_in()
         self._last_validated = time.time()
         self._identity_cached = self._identity_key()
 

@@ -121,7 +121,19 @@ def main() -> int:
                                   "_uof_token" not in r.headers.get("location", ""),
                                   r.headers.get("location", ""))
 
-        # ── 5) 代理登入頁：內容有回來、絕對網址被改寫到 localhost ─────
+        # ── 5) proxy 只能代理 configured virtual path ────────────────
+        for outside in ("/other-app/secret", f"{VPATH}-other/secret",
+                        f"{VPATH}/%2e%2e/other-app/secret",
+                        f"{VPATH}/safe%5c..%5c..%5cother-app/secret",
+                        f"{VPATH}/%252e%252e/other-app/secret"):
+            blocked = browser.get(local_origin + outside)
+            failures += _common.check(
+                f"virtual path 外路徑被拒絕：{outside}",
+                blocked.status_code == 403,
+                str(blocked.status_code),
+            )
+
+        # ── 6) 代理登入頁：內容有回來、絕對網址被改寫到 localhost ─────
         r = browser.get(f"{local_origin}{VPATH}/Login.aspx")
         failures += _common.check("代理登入頁回 200", r.status_code == 200, str(r.status_code))
         failures += _common.check("上游絕對網址被改寫成 localhost",
@@ -129,7 +141,7 @@ def main() -> int:
                                   r.text[:120])
         failures += _common.check("表單欄位原樣送達瀏覽器", "txtAccount" in r.text, r.text[:120])
 
-        # ── 6) 上游的 Set-Cookie 不得外流給瀏覽器 ────────────────────
+        # ── 7) 上游的 Set-Cookie 不得外流給瀏覽器 ────────────────────
         failures += _common.check("上游 Set-Cookie 不外流",
                                   "CSRF" not in r.headers.get("set-cookie", ""),
                                   r.headers.get("set-cookie", ""))
@@ -141,7 +153,7 @@ def main() -> int:
                                   "CSRF" in {c.name for c in session._client.cookies.jar},
                                   str({c.name for c in session._client.cookies.jar}))
 
-        # ── 7) 送出登入 → 偵測成功 → 導向本地完成頁 ──────────────────
+        # ── 8) 送出登入 → 偵測成功 → 導向本地完成頁 ──────────────────
         failures += _common.check("登入前 flow.success 為 False", flow.success is False)
         r = browser.post(f"{local_origin}{VPATH}/Login.aspx",
                          data={"txtAccount": "alice", "txtPwd": "pw"})
@@ -158,15 +170,15 @@ def main() -> int:
                                   SESSION_COOKIE in {c.name for c in session._client.cookies.jar},
                                   str({c.name for c in session._client.cookies.jar}))
 
-        # ── 8) 完成頁可讀，之後代理自關 ─────────────────────────────
+        # ── 9) 完成頁可讀，之後代理自關 ─────────────────────────────
         r = browser.get(f"{local_origin}/__uof_login_done")
         failures += _common.check("完成頁回 200 HTML",
                                   r.status_code == 200 and "登入完成" in r.text, str(r.status_code))
 
-        # ── 9) 探測函式對「已登入」回 True ───────────────────────────
+        # ── 10) 探測函式對「已登入」回 True ──────────────────────────
         failures += _common.check("probe_logged_in() 回 True", flow.probe_logged_in() is True)
 
-        # ── 10) 帳號擷取：只解帳號欄位、支援 ASP.NET 編碼過的欄位名 ────
+        # ── 11) 帳號擷取：只解帳號欄位、支援 ASP.NET 編碼過的欄位名 ────
         from mcp_uof.auth.browser_login import _account_from_login_post as _acct
         failures += _common.check("擷取單純表單的帳號",
                                   _acct(b"txtAccount=alice&txtPwd=pw") == "alice")

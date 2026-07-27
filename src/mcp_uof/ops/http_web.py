@@ -1073,7 +1073,7 @@ class HttpSession:
         self.session_source: Optional[str] = (meta or {}).get("source")
         # 目前 session 實際屬於哪個帳號。瀏覽器登入時由代理取得，帳密登入時就是 UOF_ACCOUNT。
         # 身份顯示一律以它為準，不能直接拿 UOF_ACCOUNT 頂替——兩者可能是不同的人。
-        self.session_account: str = (meta or {}).get("account") or ""
+        self.session_account: str = (meta or {}).get("actual_account") or ""
 
     # ── Internal helpers ─────────────────────────────────────────────
 
@@ -1129,10 +1129,13 @@ class HttpSession:
 
         # 已經是瀏覽器登入的身份時，session 過期一律要求重新登入，**不能**改用環境變數帳密
         # 自動登入：那會讓操作身份在程序中途從「實際登入的人」悄悄變成 UOF_ACCOUNT。
-        if self.session_source == "browser":
+        if self.session_source in ("browser", "browser_pending"):
+            pending = self.session_source == "browser_pending"
             raise BrowserLoginRequired(
-                f"目前是瀏覽器登入的身份（{self.session_account or '未辨識'}），session 已失效。"
-                "為避免中途換成環境變數帳號，不會自動重登，請重新呼叫 uof_custom_login"
+                ("瀏覽器登入仍在等待使用者完成，不能改用環境變數帳密登入"
+                 if pending else
+                 f"目前是瀏覽器登入的身份（{self.session_account or '未辨識'}），session 已失效。"
+                 "為避免中途換成環境變數帳號，不會自動重登，請重新呼叫 uof_custom_login")
             )
         account = os.environ.get("UOF_ACCOUNT", "")
         password = os.environ.get("UOF_PASSWORD", "")
@@ -2792,6 +2795,12 @@ class HttpWebBackend(OpsBackend):
                     "所有操作都會以實際登入的身份送出。請據實告知使用者，不要以設定值稱呼對方。"
                 )
             return out
+        if session.session_source == "browser_pending":
+            return (
+                "🔑 http_web session：瀏覽器登入仍在等待使用者完成。\n"
+                f"   伺服器: {base}\n\n"
+                "完成瀏覽器登入前不會改用環境變數帳密，也不會執行其他受保護工具。"
+            )
         if has_password_credentials() and session.session_source != "browser":
             return (
                 f"⚠️ http_web session：帳號 {os.environ.get('UOF_ACCOUNT', '')} 未登入"
@@ -2819,10 +2828,12 @@ class HttpWebBackend(OpsBackend):
             old_account = session.session_account
             _store.clear_session(account=old_account)
             session._client.cookies.clear()
-            session.session_source = None
             session.session_account = ""
             _bl.shutdown_flow()
 
+        # 使用者一旦明確啟動瀏覽器登入（尤其 force 換身份），等待期間就不得 fallback
+        # 到 UOF_ACCOUNT/UOF_PASSWORD。狀態要在起 proxy 前先設好，連 bind/open 失敗也 fail closed。
+        session.session_source = "browser_pending"
         flow = _bl.start_login_flow(session, reuse=not force)
         opened = _bl.open_in_browser(flow.url)
         wait = _bl.wait_seconds()

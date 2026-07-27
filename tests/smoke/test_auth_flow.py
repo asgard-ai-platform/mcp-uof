@@ -320,6 +320,70 @@ def _force_relogin_clears_old_identity_file() -> int:
     return failures
 
 
+def _force_relogin_pending_blocks_password_fallback() -> int:
+    """force 換身份等待期間，即使 env 帳密存在且 provider cache 還有效也不能自動登入。"""
+    import mcp_uof.auth.base as ab
+    import mcp_uof.auth.browser_login as bl
+    from mcp_uof.ops import get_backend
+    from mcp_uof.ops.http_web import get_http_session
+
+    failures = 0
+    real_open = bl.open_in_browser
+    bl.open_in_browser = lambda url: True
+    os.environ["UOF_ACCOUNT"] = _fake_uof.VALID_ACCOUNT
+    os.environ["UOF_PASSWORD"] = _fake_uof.VALID_PASSWORD
+    os.environ["UOF_LOGIN_WAIT_SECONDS"] = "0.01"
+    _reset_process_state()
+
+    try:
+        provider = ab.get_session_provider()
+        provider.ensure_valid()  # 先建立有效 env session 與 30 秒 validation cache
+        backend = get_backend()
+        out = backend.login(force=True)
+        session = get_http_session()
+        failures += _common.check(
+            "force relogin 等待期間標成 browser_pending",
+            session.session_source == "browser_pending" and "等待" in out,
+            f"source={session.session_source!r}, out={out[:100]}",
+        )
+
+        login_calls = []
+        real_do_login = session._do_login
+        session._do_login = lambda: login_calls.append("password fallback")
+        try:
+            raised = None
+            try:
+                provider.ensure_valid()
+            except Exception as ex:
+                raised = ex
+            failures += _common.check(
+                "browser_pending 優先於舊的 30 秒 validation cache",
+                isinstance(raised, ab.BrowserLoginRequired),
+                repr(raised),
+            )
+
+            def uof_custom_get_form_list():
+                return "TOOL RAN"
+
+            guarded = ab.require_auth(uof_custom_get_form_list)
+            guarded_out = guarded()
+            failures += _common.check(
+                "browser_pending 期間受保護工具回登入提示且不執行",
+                "🔑" in guarded_out and "TOOL RAN" not in guarded_out and not login_calls,
+                f"out={guarded_out[:100]}, login_calls={login_calls}",
+            )
+        finally:
+            session._do_login = real_do_login
+    finally:
+        bl.open_in_browser = real_open
+        bl.shutdown_flow()
+        os.environ.pop("UOF_LOGIN_WAIT_SECONDS", None)
+        os.environ.pop("UOF_ACCOUNT", None)
+        os.environ.pop("UOF_PASSWORD", None)
+        _reset_process_state()
+    return failures
+
+
 def main() -> int:
     failures = 0
     server, base_url = _fake_uof.start_fake_uof()
@@ -419,6 +483,7 @@ def main() -> int:
         failures += _browser_identity_wins_over_env()
         failures += _failed_login_then_switch_account()
         failures += _force_relogin_clears_old_identity_file()
+        failures += _force_relogin_pending_blocks_password_fallback()
 
     finally:
         server.shutdown()

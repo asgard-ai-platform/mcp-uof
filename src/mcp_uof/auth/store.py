@@ -3,8 +3,9 @@
 存的是可重放的 session cookie、等同登入態，所以目錄與檔案都收緊到 0700 / 0600（既有目錄也會
 主動檢查擁有者與權限），暫存檔用 `mkstemp` 建立以避免被搶先建立符號連結。
 
-**檔名以「站台 + 實際登入帳號」命名**：同一台機器上不同人各自一份，不會互相覆蓋或誤載。
-瀏覽器登入的帳號在登入時取得（見 `browser_login`）；啟動時還不知道自己是誰，因此：
+**檔名以「站台 + storage key」命名**：storage key 可由 namespace 或帳號提供，同一台機器上的
+不同 server entry 不會互相覆蓋或誤載。metadata 另存 `actual_account`；無法從瀏覽器登入流程
+辨識帳號時維持空白，絕不拿 namespace / `UOF_ACCOUNT` 冒充實際身份。啟動時還不知道自己是誰，因此：
 `UOF_SESSION_NAMESPACE` / `UOF_ACCOUNT` 有設就直接定位，都沒設時只在「該站台剛好只有一份存檔」
 才沿用，有多份就寧可要求重新登入，也不猜。
 
@@ -64,11 +65,18 @@ def _ensure_dir() -> Path:
     每次都驗擁有者並主動 chmod。目錄若屬於別人就直接拒絕：那代表對方能讀走 session。
     """
     d = credentials_dir()
-    d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    st = d.stat()
+    try:
+        st = os.lstat(d)
+    except FileNotFoundError:
+        d.mkdir(mode=0o700, parents=True, exist_ok=True)
+        st = os.lstat(d)
+    if stat.S_ISLNK(st.st_mode):
+        raise SessionDirUnsafe(f"{d} 是符號連結，拒絕用來存取可重放的 session。")
+    if not stat.S_ISDIR(st.st_mode):
+        raise SessionDirUnsafe(f"{d} 不是目錄，拒絕用來存取可重放的 session。")
     if hasattr(os, "getuid") and st.st_uid != os.getuid():
         raise SessionDirUnsafe(
-            f"{d} 的擁有者不是目前使用者（uid {st.st_uid}），拒絕在此存放 session。"
+            f"{d} 的擁有者不是目前使用者（uid {st.st_uid}），拒絕在此存取 session。"
             "請改用 UOF_SESSION_DIR 指到自己的目錄，或設 UOF_SESSION_PERSIST=false。"
         )
     mode = stat.S_IMODE(st.st_mode)
@@ -111,8 +119,10 @@ def session_path(base_url: str = "", account: str = "") -> Path:
 
 def _candidates_for_base(base_url: str = "") -> list:
     """同一站台底下所有身份的存檔（用於「不知道自己是誰」時判斷有無歧義）。"""
-    d = credentials_dir()
-    if not d.exists():
+    try:
+        d = _ensure_dir()
+    except SessionDirUnsafe as ex:
+        _eprint(f"[auth.store] ⚠️ 不讀取 session：{ex}")
         return []
     return sorted(d.glob(f"session-{_base_digest(base_url)}-*.json"))
 
@@ -172,10 +182,12 @@ def save_session(client, *, base_url: str = "", account: str = "", source: str =
         _eprint(f"[auth.store] ⚠️ 不落地：{ex}")
         return None
     path = session_path(base_url, account)
+    actual_account = (account or "").strip()
     payload = {
         "version": STORE_VERSION,
         "base_url": base_url or os.getenv("UOF_BASE_URL", ""),
-        "account": account or session_namespace(),
+        "storage_key": _storage_key(account),
+        "actual_account": actual_account,
         "source": source,
         "saved_at": time.time(),
         "cookies": cookies,
@@ -192,7 +204,7 @@ def save_session(client, *, base_url: str = "", account: str = "", source: str =
         tmp.unlink(missing_ok=True)
         raise
     _eprint(f"[auth.store] session 已存檔（{len(cookies)} cookies, source={source}, "
-            f"account={payload['account'] or '未知'}）")
+            f"account={actual_account or '未知'}）")
     return path
 
 
@@ -203,8 +215,13 @@ def resolve_session_file(base_url: str = "") -> Optional[Path]:
     自己是誰——此時只有「該站台剛好只有一份存檔」才沿用；有多份代表同機有多個身份，猜錯就是拿
     別人的身份操作，所以寧可要求重新登入。
     """
+    try:
+        directory = _ensure_dir()
+    except SessionDirUnsafe as ex:
+        _eprint(f"[auth.store] ⚠️ 不讀取 session：{ex}")
+        return None
     if session_namespace():
-        path = session_path(base_url)
+        path = directory / session_path(base_url).name
         return path if path.exists() else None
     found = _candidates_for_base(base_url)
     if not found:
@@ -218,20 +235,61 @@ def resolve_session_file(base_url: str = "") -> Optional[Path]:
     return None
 
 
+def _read_session_payload(path: Path) -> dict:
+    """不跟隨 symlink 地開啟 session，並以已開啟 fd 的 metadata 驗證 owner/type/mode。"""
+    lst = os.lstat(path)
+    if stat.S_ISLNK(lst.st_mode):
+        raise SessionDirUnsafe(f"{path} 是符號連結，拒絕載入 session。")
+    if not stat.S_ISREG(lst.st_mode):
+        raise SessionDirUnsafe(f"{path} 不是一般檔案，拒絕載入 session。")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    try:
+        st = os.fstat(fd)
+        if (st.st_dev, st.st_ino) != (lst.st_dev, lst.st_ino):
+            raise SessionDirUnsafe(f"{path} 在讀取期間被替換，拒絕載入 session。")
+        if not stat.S_ISREG(st.st_mode):
+            raise SessionDirUnsafe(f"{path} 不是一般檔案，拒絕載入 session。")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise SessionDirUnsafe(
+                f"{path} 的擁有者不是目前使用者（uid {st.st_uid}），拒絕載入 session。"
+            )
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & 0o077:
+            # 內容在權限過寬期間可能已被竄改；收緊是為了阻止後續讀取，但本次不能再信任。
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+            else:
+                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+            raise SessionDirUnsafe(
+                f"{path} 權限過寬（{oct(mode)}），已改回 0600；"
+                "既有內容可能曾被其他使用者修改，本次拒絕載入，請重新登入。"
+            )
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            fd = -1
+            return json.load(f)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def load_session(client, *, base_url: str = "", account: str = "") -> Optional[dict]:
     """把磁碟上的 cookie 灌回 client；成功回 meta dict，無檔或無可用 cookie 回 None。"""
     if not persist_enabled():
         return None
-    path = session_path(base_url, account) if account else resolve_session_file(base_url)
+    try:
+        directory = _ensure_dir()
+    except SessionDirUnsafe as ex:
+        _eprint(f"[auth.store] ⚠️ 不讀取 session：{ex}")
+        return None
+    path = ((directory / session_path(base_url, account).name)
+            if account else resolve_session_file(base_url))
     if path is None or not path.exists():
         return None
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
-        if mode & 0o077:
-            _eprint(f"[auth.store] ⚠️ {path} 權限過寬（{oct(mode)}），已改回 0600")
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
+        payload = _read_session_payload(path)
     except Exception as ex:
         _eprint(f"[auth.store] ⚠️ 讀取 session 存檔失敗，忽略（{type(ex).__name__}: {ex}）")
         return None
@@ -240,7 +298,7 @@ def load_session(client, *, base_url: str = "", account: str = "") -> Optional[d
         return None
     # 設了 UOF_ACCOUNT 就代表本程序該是那個人；存檔屬於別人時絕不沿用，否則會安靜地換身份。
     expected = os.getenv("UOF_ACCOUNT", "").strip()
-    stored = (payload.get("account") or "").strip()
+    stored = (payload.get("actual_account") or "").strip()
     if expected and stored and stored.lower() != expected.lower():
         _eprint(f"[auth.store] ⚠️ 存檔屬於 {stored!r}，但本程序設定為 {expected!r}，不予沿用")
         return None
@@ -266,7 +324,13 @@ def clear_session(base_url: str = "", account: str = "") -> bool:
 
     定位方式與載入時一致（`resolve_session_file`），否則 logout 會刪錯檔或刪不到。
     """
-    path = session_path(base_url, account) if account else resolve_session_file(base_url)
+    try:
+        directory = _ensure_dir()
+    except SessionDirUnsafe as ex:
+        _eprint(f"[auth.store] ⚠️ 不刪除 session：{ex}")
+        return False
+    path = ((directory / session_path(base_url, account).name)
+            if account else resolve_session_file(base_url))
     if path is None:
         return False
     try:
@@ -279,8 +343,10 @@ def clear_session(base_url: str = "", account: str = "") -> bool:
 
 def clear_all_sessions() -> int:
     """刪除本機所有身份的 session 存檔，回刪除數量。"""
-    d = credentials_dir()
-    if not d.exists():
+    try:
+        d = _ensure_dir()
+    except SessionDirUnsafe as ex:
+        _eprint(f"[auth.store] ⚠️ 不刪除 session：{ex}")
         return 0
     n = 0
     for p in d.glob("session-*.json"):
