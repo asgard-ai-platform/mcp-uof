@@ -23,7 +23,7 @@ This repository contains a Python MCP server for UOF first-generation workflow o
 - `src/mcp_uof/ops/` — operation layer used by MCP tools.
   - `base.py` defines the backend interface.
   - `router.py` contains the tool-to-backend binding table.
-  - `http_web.py` implements UOF web automation with `httpx` and `lxml`.
+  - `http_web/` implements UOF web automation as composed runtime, form, detail, dialog, task, and session-lifecycle modules.
 - `src/mcp_uof/_log.py` — shared stderr logging helper for stdio-safe diagnostics.
 
 ## Test layout

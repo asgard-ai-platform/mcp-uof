@@ -58,7 +58,12 @@ class OpsRouter(OpsBackend):
         return self._http_web
 
     def _route(self, op: str, *args, **kwargs) -> str:
-        return getattr(self.http_web, op)(*args, **kwargs)
+        operation = getattr(self.http_web, op)
+        if op in ("check_auth", "login"):
+            return operation(*args, **kwargs)
+        from .http_web.session import session_lifecycle
+        with session_lifecycle().operation():
+            return operation(*args, **kwargs)
 
     # ── 對外操作 ────────────────────────────────────────────────────
     def check_auth(self) -> str:

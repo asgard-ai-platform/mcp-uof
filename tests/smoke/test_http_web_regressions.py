@@ -8,12 +8,12 @@ import _common
 
 _common.ensure_src_on_path()
 
-from mcp_uof.ops.http_web import (  # noqa: E402
-    HttpSession,
-    _FORM_CACHE_TTL_SECONDS,
+from mcp_uof.ops.http_web import HttpSession  # noqa: E402
+from mcp_uof.ops.http_web.constants import _FORM_CACHE_TTL_SECONDS  # noqa: E402
+from mcp_uof.ops.http_web.rendering import _parse_filled_form_fields  # noqa: E402
+from mcp_uof.ops.http_web.validation import (  # noqa: E402
     _map_row_to_columns,
     _mark_filled,
-    _parse_filled_form_fields,
     _resolve_checkbox_value,
     _uof_row_date,
 )
@@ -70,9 +70,9 @@ def main() -> int:
 
     no_retry = _session_with_client(_Client([_Resp("https://uof.example/Login.aspx")]))
     no_retry._relogin_if_still_expired = lambda: (_ for _ in ()).throw(AssertionError("不應重登"))
-    resp = no_retry.post("/write.aspx", {"x": "1"}, retry_on_login=False)
+    resp = no_retry.post("/write.aspx", {"x": "1"})
     failures += _common.check(
-        "寫入 POST 遇 Login.aspx 不自動重送",
+        "POST 預設禁止 replay，寫入遇 Login.aspx 不自動重送",
         "Login.aspx" in str(resp.url) and no_retry._client.posts == 1,
         f"posts={no_retry._client.posts}, url={resp.url}",
     )
@@ -83,9 +83,9 @@ def main() -> int:
     ]))
     relogins = []
     retry._relogin_if_still_expired = lambda: relogins.append("login")
-    resp2 = retry.post("/query.aspx", {"x": "1"})
+    resp2 = retry.post("/query.aspx", {"x": "1"}, retry_on_login=True)
     failures += _common.check(
-        "查詢 POST 預設仍會重登後重送",
+        "已知安全的查詢 POST 明確 opt in 後才會重登重送",
         str(resp2.url).endswith("/ok.aspx") and retry._client.posts == 2 and relogins == ["login"],
         f"posts={retry._client.posts}, relogins={relogins}, url={resp2.url}",
     )
@@ -135,12 +135,16 @@ def main() -> int:
     _, _, bad_checkbox = _resolve_checkbox_value(
         [{"value": "否", "label": "否"}], "不轉"
     )
+    _, _, opposite_checkbox = _resolve_checkbox_value(
+        [{"value": "否", "label": "否"}], "是"
+    )
     failures += _common.check(
         "checkbox 合法選項「否」優先於布林 false 語意且未知字串會擋下",
         checked and posted == "否" and err is None
         and not unchecked and false_err is None
-        and bad_checkbox is not None,
-        f"checked={checked}, posted={posted}, err={err}, bad={bad_checkbox}",
+        and bad_checkbox is not None and opposite_checkbox is not None,
+        f"checked={checked}, posted={posted}, err={err}, "
+        f"bad={bad_checkbox}, opposite={opposite_checkbox}",
     )
 
     in_range = {"apply_time": "2030/01/15 20:21", "close_time": "2030-01-16"}

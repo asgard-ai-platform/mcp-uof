@@ -51,19 +51,8 @@ class SessionAuthProvider(AuthProvider):
 
     def clear(self, all_identities: bool = False) -> None:
         """清除認證狀態：記憶體 session、背景登入流程，以及磁碟上的 session 存檔。"""
-        from ..ops.http_web import current_http_session, reset_http_session
-        from .browser_login import shutdown_flow
-
-        # 先取實際登入帳號再 reset：瀏覽器身份可能與 UOF_ACCOUNT 不同，否則會刪錯檔。
-        sess = current_http_session()
-        account = (sess.session_account if sess else "") or ""
-
-        shutdown_flow()
-        reset_http_session()
-        if all_identities:
-            store.clear_all_sessions()
-        else:
-            store.clear_session(account=account)
+        from ..ops.http_web.session import session_lifecycle
+        session_lifecycle().reset(all_identities=all_identities)
         self._last_validated = 0.0
         self._identity_cached = None
 

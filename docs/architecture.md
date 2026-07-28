@@ -43,8 +43,9 @@ MCP client (Claude Desktop / VS Code)
 | 2 | 帳密自動登入 | `UOF_ACCOUNT` + `UOF_PASSWORD` 都有設（CI／`tests/mounted/` 走這條） |
 | 3 | 瀏覽器登入（`auth/browser_login.py`） | 前兩者都不成立 → 要求呼叫 `uof_custom_login` |
 
-`HttpSession`（`httpx.Client`）持有 cookie jar；每次 GET/POST 若被重導至 Login.aspx 就依同一順序重新
-取得 session 後重試。同一程序內的複合操作不應並行交錯。
+`HttpTransport`（`httpx.Client`）持有 cookie jar；安全讀取若被導至 Login.aspx，會重新取得 session
+後重試一次。起單、明細、簽核與作廢等不可重放寫入不會自動重送，而是回報未完成或未確認。
+同一程序內的複合操作由 session lifecycle operation lease 序列化。
 
 ### 瀏覽器登入：為什麼是反向代理
 

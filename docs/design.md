@@ -8,11 +8,11 @@
 
 ## 為什麼機制在設計期決定
 
-每個工具目前都由 `OpsRouter` 委派給 `HttpWebBackend`；`BINDING` 同時作為工具登記與 smoke test 護欄。`HttpSession.post()` 遇到登入頁會重新登入並重送一次，因此新增不可重放的寫入操作時必須評估重送風險。
+每個工具目前都由 `OpsRouter` 委派給 `HttpWebBackend`；`BINDING` 同時作為工具登記與 smoke test 護欄。`WebFormsRuntime` 是 replay policy 的唯一 owner：安全查詢可在重新登入後重送一次，不可重放寫入一律禁止自動重送。
 
 ## 逐工具實作對照
 
-全部走 http_web（`ops/http_web.py` 的 `HttpWebBackend` + `HttpSession`）。
+全部走 http_web（`ops/http_web/` package 的 `HttpWebBackend` + `HttpSession` composition root）。
 
 | 工具 | 背後實際呼叫 | 異動 |
 | --- | --- | :-: |
@@ -44,7 +44,7 @@
 | -------- | ----------------------------------------------------------------- |
 | 怎麼來   | 三段來源依序：session 存檔 → 帳密 POST `Login.aspx` → 瀏覽器登入 |
 | 存哪     | `httpx.Client` 的程序記憶體 cookie jar；另存 `UOF_SESSION_DIR`（預設 `~/.uof`，`0600`）供重啟沿用 |
-| 失效處理 | GET/POST 被導回 `Login.aspx` → 依同一順序重新取得 session 後重試一次 |
+| 失效處理 | 安全查詢被導回 `Login.aspx` → 重新取得 session 後重試一次；不可重放寫入不重送 |
 
 一個程序固定一個身份；不同 server process 各自持有 session。
 
@@ -76,11 +76,11 @@ localhost、Host 檢查、一次性 token、不外流上游 `Set-Cookie`、同 h
 
 ## httpx 網頁抓取流程（共用）
 
-實作在 `ops/http_web.py`：`HttpSession`（`httpx.Client`）+ `HttpWebBackend`。複合 WebForms 操作不應在同一 session 中並行交錯。
+實作在 `ops/http_web/`：`HttpSession` 組合 `HttpTransport`、`WebFormsRuntime` 與各操作 module，再由 `HttpWebBackend` 呈現 MCP 結果。session lifecycle 的 operation lease 會序列化完整複合操作，避免同一 cookie session 的 WebForms state 交錯。
 
 1. 建立 `HttpSession` 時先從 session 存檔灌回上次的 cookie；沒有或已失效才走登入。
 2. 帳密備援登入 → GET `Login.aspx` 取 `__VIEWSTATE`，POST 帳密，cookie 由 `httpx.Client` 自動維持。
-3. 每次 GET/POST 若被導回 `Login.aspx`（session 過期），自動重新取得 session 後重試一次。
+3. 安全讀取／查詢若被導回 `Login.aspx`，重新取得 session 後重試一次；起單、明細、簽核與作廢寫入明確使用 `ReplayPolicy.NEVER`。
 4. 本實作只支援同步整頁 postback（帶 `__EVENTTARGET` 與頁面狀態）；尚未支援 async partial postback。
 
 所需設定：`UOF_BASE_URL`（必填），`UOF_ACCOUNT` / `UOF_PASSWORD`（選填，帳密備援用）。
@@ -89,7 +89,7 @@ localhost、Host 檢查、一次性 token、不外流上游 `Set-Cookie`、同 h
 
 ## 怎麼新增一個工具（可直接 follow）
 
-1. **實作機制**：在 `ops/http_web.py` 的 `HttpSession` 加 scrape/postback 方法（httpx GET/POST + lxml 解析； `get()` / `post()` 已含 session 失效重登重試），再在 `HttpWebBackend` 加對外方法。
+1. **實作操作**：把完整、安全的 UOF transaction 放進 `ops/http_web/` 對應 operation module；共用 WebForms state、postback 與 replay policy 由 `runtime.py` 負責，HTTP/session 機制由 `transport.py` 負責。`HttpSession` 只作 composition root 與必要的相容 facade，再由 `HttpWebBackend` 加入對外呈現。
 2. **宣告介面**：在 `ops/base.py` 的 `OpsBackend` 加上這個 `@abstractmethod`。
 3. **登記綁定**：在 `ops/router.py` 的 `OpsRouter` 加同名方法 `return self._route("<name>", ...)`，並在 `BINDING` 標記它走 `"http_web"`。
 4. **對外暴露**：在 `server.py` 加一個 `@mcp.tool` 的 `uof_custom_<name>`，內部 `return get_backend().<name>(...)`，並寫清楚 docstring（何時用、限制；**不要**提機制/模式）。
@@ -98,7 +98,7 @@ localhost、Host 檢查、一次性 token、不外流上游 `Set-Cookie`、同 h
 
 ## 網頁端點常數
 
-httpx 端點常數集中在 `ops/http_web.py` 頂部（`Login.aspx`、`ApplyFormList.aspx`、`AddFormScript.aspx`、 `ViewFormTemp.aspx`、`FormGetBack.aspx`、`SignNodeForm.aspx` 等）。已打通的網頁自動化能力（起單/送出、通用 dataGrid、簽核三步、作廢）封裝在 `HttpSession`。
+httpx 端點常數集中在 `ops/http_web/constants.py`。WebForms 協定封裝在 `runtime.py`；起單、明細與任務 lifecycle 分別由 `submission.py`、`details.py`、`lifecycle.py` 擁有完整 transaction，`HttpSession` 負責明確組合這些操作。
 
 ## 能力現況
 

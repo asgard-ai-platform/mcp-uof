@@ -261,9 +261,9 @@ def uof_custom_operate_dialog(
     form_version_id: Annotated[str, Field(description="表單版本代號 formVersionId")],
     field_code: Annotated[str, Field(description="對話框欄位代碼（如 PRItems、MAINFORM）")],
     values: Annotated[
-        dict,
+        Optional[dict],
         Field(description="要填入的控制項，{控制項名稱: 值}；名稱由 get_dialog_structure 取得"),
-    ] = {},
+    ] = None,
     press: Annotated[
         str,
         Field(description="要按下的按鈕名稱（如 btnQueryItem 查詢、btnCalc 計算、MasterPageRadButton1 確定）；留空只填值不按鈕"),
