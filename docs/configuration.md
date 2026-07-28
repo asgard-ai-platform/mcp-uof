@@ -48,6 +48,7 @@ session 中途失效（被重導回 `Login.aspx`）走同一套：能自動重�
 | `UOF_LOGIN_WAIT_SECONDS` | No | `uof_custom_login` 同步等待使用者登入的秒數（預設 `45`） |
 | `UOF_LOGIN_TIMEOUT_SECONDS` | No | 本機登入頁在背景保留的秒數（預設 `600`） |
 | `UOF_SESSION_DIR` | No | session 存放目錄，支援 `~` 展開（預設 `~/.uof`） |
+| `UOF_SESSION_FILE` | No | 固定 session 檔名，供外部工具交接 session；只能是純檔名，且只適合每人獨立 `UOF_SESSION_DIR` 的部署 |
 | `UOF_SESSION_NAMESPACE` | No | 同機多身份時用來區分是哪一位（見下）；未設時退回 `UOF_ACCOUNT` |
 | `UOF_SESSION_PERSIST` | No | `false` 則 session 只留記憶體、不寫入磁碟（預設 `true`） |
 | `UOF_LOGIN_DEBUG` | No | 設任意值則把登入代理的請求記錄印到 stderr（除錯用） |
@@ -60,6 +61,8 @@ session 中途失效（被重導回 `Login.aspx`）走同一套：能自動重�
 - 路徑：`<UOF_SESSION_DIR>/session-<帳號>-<身份雜湊>.json`，預設目錄 `~/.uof`；目錄 `0700`、檔案 `0600`。
 - 想放在別處（例如加密磁碟區）就設 `UOF_SESSION_DIR`；設了 `UOF_SESSION_PERSIST=false` 則完全不落地。
 - 檔名以「站台 + **實際登入帳號**」命名，不同人各自一份，不會互相覆蓋。
+- 外部工具需要交接 session 時可設 `UOF_SESSION_FILE=auth.json` 使用固定檔名；外部工具仍須將目錄設為
+  `0700`、檔案設為 `0600`。固定檔名不含身份，只能搭配每人獨立的 `UOF_SESSION_DIR`，不可共用目錄。
 - 目錄與檔案的權限每次都會檢查並收緊（`0700` / `0600`）；目錄若不屬於目前使用者則直接拒絕存放。
 
 ### 同一台機器有多個身份時

@@ -9,7 +9,11 @@
 `UOF_SESSION_NAMESPACE` / `UOF_ACCOUNT` 有設就直接定位，都沒設時只在「該站台剛好只有一份存檔」
 才沿用，有多份就寧可要求重新登入，也不猜。
 
-設定：`UOF_SESSION_DIR` 指定目錄（預設 `~/.uof`）、`UOF_SESSION_PERSIST=false` 完全不落地。
+`UOF_SESSION_FILE` 改用固定檔名，供外部工具寫入 session 再交給本 server 讀取；檔名不含身份，
+只適合「每人一個 `UOF_SESSION_DIR`」的部署。
+
+設定：`UOF_SESSION_DIR` 指定目錄（預設 `~/.uof`）、`UOF_SESSION_FILE` 固定檔名、
+`UOF_SESSION_PERSIST=false` 完全不落地。
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ import stat
 import tempfile
 import time
 from http import cookiejar as _cookiejar
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional
 
 from .._log import eprint as _eprint
@@ -106,13 +110,39 @@ def _base_digest(base_url: str = "") -> str:
     return hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:8]
 
 
+def session_filename() -> str:
+    """`UOF_SESSION_FILE` 指定的固定檔名；未設定回空字串（改用站台+身份的推導檔名）。
+
+    只接受跨平台皆為單純檔名的值，避免路徑分隔或 Windows drive 逃出 session 目錄。
+    """
+    name = os.getenv("UOF_SESSION_FILE", "").strip()
+    if not name:
+        return ""
+    windows_path = PureWindowsPath(name)
+    if (
+        name in (".", "..")
+        or PurePosixPath(name).name != name
+        or windows_path.name != name
+        or bool(windows_path.drive)
+    ):
+        _eprint(f"[auth.store] ⚠️ UOF_SESSION_FILE={name!r} 不是安全純檔名，已忽略並改用推導檔名")
+        return ""
+    return name
+
+
 def identity_key(base_url: str = "", account: str = "") -> str:
     base_url = base_url or os.getenv("UOF_BASE_URL", "")
     return f"{base_url}|{account or session_namespace()}"
 
 
 def session_path(base_url: str = "", account: str = "") -> Path:
-    """本身份的存檔路徑；檔名鍵由 `_storage_key` 決定，存與讀共用同一規則。"""
+    """本身份的存檔路徑；檔名鍵由 `_storage_key` 決定，存與讀共用同一規則。
+
+    設了 `UOF_SESSION_FILE` 時改用該固定檔名。
+    """
+    fixed = session_filename()
+    if fixed:
+        return credentials_dir() / fixed
     who = _storage_key(account)
     return credentials_dir() / f"session-{_base_digest(base_url)}-{_safe_name(who)}.json"
 
@@ -124,6 +154,10 @@ def _candidates_for_base(base_url: str = "") -> list:
     except SessionDirUnsafe as ex:
         _eprint(f"[auth.store] ⚠️ 不讀取 session：{ex}")
         return []
+    fixed = session_filename()
+    if fixed:
+        p = d / fixed
+        return [p] if p.exists() else []
     return sorted(d.glob(f"session-{_base_digest(base_url)}-*.json"))
 
 
@@ -220,7 +254,7 @@ def resolve_session_file(base_url: str = "") -> Optional[Path]:
     except SessionDirUnsafe as ex:
         _eprint(f"[auth.store] ⚠️ 不讀取 session：{ex}")
         return None
-    if session_namespace():
+    if session_filename() or session_namespace():
         path = directory / session_path(base_url).name
         return path if path.exists() else None
     found = _candidates_for_base(base_url)
@@ -349,7 +383,11 @@ def clear_all_sessions() -> int:
         _eprint(f"[auth.store] ⚠️ 不刪除 session：{ex}")
         return 0
     n = 0
-    for p in d.glob("session-*.json"):
+    fixed = session_filename()
+    targets = [d / fixed] if fixed else sorted(d.glob("session-*.json"))
+    for p in targets:
+        if not p.exists():
+            continue
         try:
             p.unlink()
             n += 1

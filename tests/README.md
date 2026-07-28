@@ -27,7 +27,7 @@ uv run python tests/run.py all       # 兩層依序（缺 .env 時真實層自�
 - `smoke/test_http_web_regressions.py`：通用 http_web 寫入重送、快取與原生明細欄位映射。
 - `smoke/test_plugin_detail_rows.py`：plugin 明細 editor／巢狀 picker 解析、完整候選 row、計算與 lookup
   postback 順序、必填控制項及拒絕原因。
-- `smoke/test_session_store.py`：session 存檔的 round-trip、檔案權限、身份隔離、過期處理、`UOF_SESSION_DIR` 覆寫。
+- `smoke/test_session_store.py`：session 存檔的 round-trip、檔案權限、身份隔離、過期處理、`UOF_SESSION_DIR` 與安全固定檔名覆寫。
 - `smoke/test_browser_login.py`：對假 UOF upstream 驗證登入代理的安全邊界（token/Host 檢查、上游 `Set-Cookie` 不外流）、網址改寫與登入成功偵測。
 - `smoke/test_auth_flow.py`：三段認證優先序、`check_auth`/`logout` 文案分流，以及 `uof_custom_login` 全程整合（假瀏覽器，不會開視窗）。
 

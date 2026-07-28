@@ -135,6 +135,58 @@ def main() -> int:
                               store.credentials_dir() == Path(tmp) / ".uof",
                               str(store.credentials_dir()))
 
+    # ── 6.6) UOF_SESSION_FILE 固定檔名 ────────────────────────────────
+    fixed_dir = Path(tmp) / "fixed-name-dir"
+    os.environ["UOF_SESSION_DIR"] = str(fixed_dir)
+    os.environ["UOF_SESSION_FILE"] = "auth.json"
+    failures += _common.check("固定檔名生效", store.session_path().name == "auth.json",
+                              store.session_path().name)
+    failures += _common.check(
+        "站台與身份都不再參與命名",
+        store.session_path(account="alice").name
+        == store.session_path("https://other.example/X", "bob").name == "auth.json",
+    )
+    os.environ.pop("UOF_ACCOUNT", None)
+    store.save_session(_client_with("ASP.NET_SessionId", "fixed-1"), account="alice",
+                       source="browser")
+    failures += _common.check("存檔寫到固定檔名", (fixed_dir / "auth.json").exists())
+    resolved = store.resolve_session_file()
+    failures += _common.check("resolve_session_file 定位到固定檔名",
+                              resolved is not None and resolved.name == "auth.json",
+                              str(resolved))
+    loaded = httpx.Client()
+    failures += _common.check("load_session 讀得回固定檔名的存檔",
+                              store.load_session(loaded) is not None
+                              and loaded.cookies.get("ASP.NET_SessionId") == "fixed-1")
+    # 固定檔名不符 `session-*.json` glob，漏刪會留下可重放的登入態。
+    failures += _common.check("clear_all_sessions 刪得到固定檔名",
+                              store.clear_all_sessions() == 1
+                              and not (fixed_dir / "auth.json").exists())
+
+    # 路徑分隔或 Windows drive 可能逃出 session 目錄，必須拒絕並退回推導檔名。
+    for bad in (
+        "../escape.json",
+        "sub/dir.json",
+        r"..\escape.json",
+        r"sub\dir.json",
+        "C:escape.json",
+        r"C:\escape.json",
+        "..",
+    ):
+        os.environ["UOF_SESSION_FILE"] = bad
+        name = store.session_path().name
+        failures += _common.check(
+            f"拒絕逃逸的 UOF_SESSION_FILE={bad!r}",
+            name.startswith("session-") and "/" not in name and "\\" not in name
+            and ".." not in name,
+            name,
+        )
+    os.environ.pop("UOF_SESSION_FILE")
+    failures += _common.check("移除後回到推導檔名",
+                              store.session_path().name.startswith("session-"),
+                              store.session_path().name)
+    os.environ.pop("UOF_SESSION_DIR")
+
     # ── 7) clear ──────────────────────────────────────────────────
     os.environ["UOF_ACCOUNT"] = "alice"
     failures += _common.check("clear_session 刪掉本身份存檔", store.clear_session() is True)

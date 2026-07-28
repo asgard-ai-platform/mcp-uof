@@ -22,7 +22,7 @@ Report privately to the repository maintainers through your normal security cont
   password does transit the server process in memory — it is never parsed, logged, persisted, or
   returned to the AI, and never stored in a config file. Only the account field is read, to label
   which identity a stored session belongs to.
-- The resulting session is stored at `$UOF_SESSION_DIR/session-*.json` (default `~/.uof`) with `0600` permissions. **That file is a replayable session cookie — treat it like a password.** Revoke it with `uof_custom_logout`, or set `UOF_SESSION_PERSIST=false` to keep the session in memory only.
+- The resulting session is stored under `$UOF_SESSION_DIR` (default `~/.uof`) with `0600` permissions. `UOF_SESSION_FILE` may select a fixed filename for external session handoff. **That file is a replayable session cookie — treat it like a password.** Revoke it with `uof_custom_logout`, or set `UOF_SESSION_PERSIST=false` to keep the session in memory only.
 - An unattended fallback logs in with the plaintext `UOF_ACCOUNT` / `UOF_PASSWORD` from `.env` (posted to UOF's `Login.aspx` over HTTPS). Keep `.env` out of version control and prefer browser sign-in wherever a human is present.
 - Use `.env.example` for placeholders only.
 - Treat manual and end-to-end test outputs as sensitive unless reviewed and sanitized.
