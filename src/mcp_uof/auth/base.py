@@ -93,14 +93,16 @@ def require_auth(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(func)
     def wrapper(*args, **kwargs):
-        try:
-            get_session_provider().ensure_valid()
-        except BrowserLoginRequired as e:
-            return browser_login_required_message(" ".join(str(e).split())[:160])
-        except Exception as e:
-            return auth_failure_message(" ".join(str(e).split())[:160])
-        try:
-            return func(*args, **kwargs)
-        except BrowserLoginRequired as e:
-            return browser_login_required_message(" ".join(str(e).split())[:160])
+        from ..ops.http_web.session import session_lifecycle
+        with session_lifecycle().operation():
+            try:
+                get_session_provider().ensure_valid()
+            except BrowserLoginRequired as e:
+                return browser_login_required_message(" ".join(str(e).split())[:160])
+            except Exception as e:
+                return auth_failure_message(" ".join(str(e).split())[:160])
+            try:
+                return func(*args, **kwargs)
+            except BrowserLoginRequired as e:
+                return browser_login_required_message(" ".join(str(e).split())[:160])
     return wrapper

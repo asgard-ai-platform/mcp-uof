@@ -93,7 +93,7 @@ def open_in_browser(url: str) -> bool:
 class BrowserLoginFlow:
     """一次瀏覽器登入流程：起代理 → 使用者登入 → 取得 cookie → 自關。"""
 
-    def __init__(self, session) -> None:
+    def __init__(self, session, lifecycle_token: Optional[int] = None) -> None:
         self._session = session
         self._token = secrets.token_urlsafe(24)
         self._done = threading.Event()
@@ -107,6 +107,7 @@ class BrowserLoginFlow:
         # 使用者實際登入的帳號，由登入 POST 取得（見 _account_from_login_post）。
         # 這是本程序唯一能知道「現在是誰」的途徑，session 存檔與身份顯示都靠它。
         self.account = ""
+        self.lifecycle_token = lifecycle_token
 
     # ── 生命週期 ────────────────────────────────────────────────────
     @property
@@ -158,17 +159,18 @@ class BrowserLoginFlow:
     def mark_success(self) -> None:
         if self.success:
             return
+        from ..ops.http_web.session import session_lifecycle
+        token = self.lifecycle_token
+        if token is None:
+            token = session_lifecycle().begin_browser(self._session, force=False)
+            self.lifecycle_token = token
+        if not session_lifecycle().complete_browser(self._session, token, self.account):
+            _eprint("[auth.browser_login] 忽略已失效登入流程的 late success")
+            self.shutdown()
+            return
         self.success = True
         _eprint(f"[auth.browser_login] ✅ 登入成功，session cookie 已取得"
                 f"（帳號：{self.account or '未能辨識'}）")
-        # source 在此定案，涵蓋逾時後才完成登入（login() 已 return，只剩本方法會跑）的情況。
-        self._session.session_account = self.account
-        self._session.session_source = "browser"
-        try:
-            from . import store
-            store.save_session(self._session._client, account=self.account, source="browser")
-        except Exception as ex:
-            _eprint(f"[auth.browser_login] ⚠️ session 存檔失敗（{type(ex).__name__}: {ex}）")
         self._done.set()
         # 使用者若沒載入成功頁，這個後備計時器仍會收掉代理。
         _timer(20.0, self.shutdown)
@@ -476,15 +478,17 @@ def current_flow() -> Optional[BrowserLoginFlow]:
     return _flow
 
 
-def start_login_flow(session, *, reuse: bool = True) -> BrowserLoginFlow:
+def start_login_flow(session, *, reuse: bool = True,
+                     lifecycle_token: Optional[int] = None) -> BrowserLoginFlow:
     """啟動（或沿用）瀏覽器登入流程。已有代理在跑時預設沿用同一個，不重複起 port。"""
     global _flow
     with _flow_lock:
         if reuse and _flow is not None and _flow.running and not _flow.success:
+            _flow.lifecycle_token = lifecycle_token
             return _flow
         if _flow is not None:
             _flow.shutdown()
-        _flow = BrowserLoginFlow(session)
+        _flow = BrowserLoginFlow(session, lifecycle_token)
         _flow.start()
         return _flow
 
