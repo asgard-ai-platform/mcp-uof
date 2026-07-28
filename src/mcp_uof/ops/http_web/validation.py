@@ -55,9 +55,9 @@ def _resolve_checkbox_value(options: list, value) -> tuple:
     if isinstance(value, bool):
         return value, (str(options[0]["value"]) if value and options else "on"), None
     low = sv.lower()
-    if low in ("true", "1", "yes", "y", "是", "勾選", "checked"):
+    if low in ("true", "1", "yes", "y", "checked"):
         return True, (str(options[0]["value"]) if options else "on"), None
-    if low in ("", "false", "0", "no", "n", "否", "未", "unchecked"):
+    if low in ("", "false", "0", "no", "n", "unchecked"):
         return False, "", None
     allowed = "／".join(str(o["label"]) for o in options)
     hint = f"，只能填：{allowed}、true 或 false" if allowed else "，只能填 true 或 false"
@@ -186,5 +186,4 @@ def _datagrid_dialog_path(page_html: str, field_code: str) -> str:
     """
     m = re.search(_DATAGRID_DIALOG_RE.format(code=re.escape(field_code)), page_html)
     return html.unescape(m.group(1)) if m else ""
-
 

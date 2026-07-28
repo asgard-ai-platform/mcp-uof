@@ -1,0 +1,8 @@
+{
+  "form_version_id": "00000000-0000-4000-8000-000000000006",
+  "fid": "00000000-0000-4000-8000-000000000003",
+  "vid": "00000000-0000-4000-8000-000000000006",
+  "apply_path": "/WKF/FormUse/AddFormScript.aspx?formId=00000000-0000-4000-8000-000000000003&formVersionId=00000000-0000-4000-8000-000000000006&mode=apply",
+  "addform_final_url": "https://uof.example/UOF/WKF/FormUse/DefinedTask/FirstSite.aspx?formId=00000000-0000-4000-8000-000000000003&formVersionId=00000000-0000-4000-8000-000000000006&mode=apply&scriptId=00000000-0000-4000-8000-000000000011",
+  "first_site_path": "/WKF/FormUse/DefinedTask/FirstSite.aspx?formId=00000000-0000-4000-8000-000000000003&formVersionId=00000000-0000-4000-8000-000000000006&mode=apply&scriptId=00000000-0000-4000-8000-000000000011"
+}

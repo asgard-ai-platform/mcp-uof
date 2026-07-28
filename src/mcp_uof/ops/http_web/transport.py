@@ -248,23 +248,3 @@ class HttpTransport:
             if vid == key:
                 return fid, vid
         return "", ""
-
-    def _lookup_created_form(self, form_number: str) -> tuple:
-        """After 成單, resolve (task_id, real_form_name) by listing recent forms and matching the number.
-
-        `search_forms` keyword (txtKeywordByFormQuery) does NOT match the auto form number, so a
-        keyword search returns nothing — list recent forms (no keyword) instead; the just-created
-        form is the newest row. Also returns the form's real name (registry's static name may cover
-        several formIds and be wrong for the specific one).
-        """
-        if not form_number:
-            return "", ""
-        try:
-            for rr in self.search_forms(max_results=50).get("rows", []):
-                if rr.get("form_number") == form_number:
-                    return rr.get("task_id", ""), rr.get("form_name", "")
-        except Exception as ex:
-            _eprint(f"[ops.http_web] ⚠️ lookup created form failed: {type(ex).__name__}: {ex}")
-        return "", ""
-
-    # ── Form structure ───────────────────────────────────────────────

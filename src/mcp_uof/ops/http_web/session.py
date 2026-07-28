@@ -154,7 +154,18 @@ class HttpSession:
         return HttpTransport._resolve_form_ids(self._target(), value)
 
     def _lookup_created_form(self, form_number):
-        return HttpTransport._lookup_created_form(self._target(), form_number)
+        if not form_number:
+            return "", ""
+        try:
+            for row in self.search_forms(max_results=50).get("rows", []):
+                if row.get("form_number") == form_number:
+                    return row.get("task_id", ""), row.get("form_name", "")
+        except Exception as ex:
+            _eprint(
+                f"[ops.http_web] lookup created form failed: "
+                f"{type(ex).__name__}: {ex}"
+            )
+        return "", ""
 
     # Form facade
     def scrape_form_structure(self, *args, **kwargs):

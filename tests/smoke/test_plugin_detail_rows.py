@@ -8,14 +8,17 @@ import _common
 
 _common.ensure_src_on_path()
 
-from mcp_uof.ops.http_web import (  # noqa: E402
-    HttpSession,
-    HttpWebBackend,
-    _dialog_reject_reason,
+from mcp_uof.ops.http_web import HttpSession, HttpWebBackend  # noqa: E402
+from mcp_uof.ops.http_web.details import DetailOperation  # noqa: E402
+from mcp_uof.ops.http_web.runtime import WebFormsRuntime  # noqa: E402
+from mcp_uof.ops.http_web.parsing import (  # noqa: E402
     _find_row_editor_openers,
     _lookup_dialog_target,
-    _missing_required_controls,
     _parse_dialog_fields,
+)
+from mcp_uof.ops.http_web.validation import (  # noqa: E402
+    _dialog_reject_reason,
+    _missing_required_controls,
 )
 
 
@@ -23,6 +26,24 @@ class _Resp:
     def __init__(self, text: str, url: str = "https://uof.example/UOF/RowDialog.aspx"):
         self.text = text
         self.url = url
+
+
+class _SessionAdapter:
+    def __init__(self, session):
+        self._session = session
+
+    def get(self, path):
+        return self._session.get(path)
+
+    def post(self, path, data):
+        return self._session.post(path, data, retry_on_login=False)
+
+
+def _detail(session):
+    return DetailOperation(
+        WebFormsRuntime(_SessionAdapter(session)),
+        lambda value: value.removeprefix("/UOF"),
+    )
 
 
 def _dialog_html(*, name: str = "", calculated: str = "", picked: str = "") -> str:
@@ -290,23 +311,22 @@ def main() -> int:
             '<meta id="TempReturnValue" content="{&quot;ok&quot;:true}">'
         )
     )
-    missing_rows = required_row_session.add_plugin_dialog_rows(
+    missing_rows = _detail(required_row_session).persist_plugin_rows(
         "/UOF/RowDialog.aspx?GridDataID=required",
         [{"txtMemo": "缺 key"}, {"txtMemo": "空字串", "txtRequiredValue": ""}],
     )
     failures += _common.check(
         "row editor 列內必填缺 key 或空字串都擋下且不送確認",
-        not missing_rows["ok"]
-        and missing_rows["added"] == 0
-        and len(missing_rows["errors"]) == 2
-        and all("txtRequiredValue" in e for e in missing_rows["errors"])
-        and all("txtInternalHelper" not in e for e in missing_rows["errors"])
+        not missing_rows.added
+        and len(missing_rows.errors) == 2
+        and all("必填數值（txtRequiredValue）" in e for e in missing_rows.errors)
+        and all("txtInternalHelper" not in e for e in missing_rows.errors)
         and required_row_posts == [],
         f"result={missing_rows}, posts={required_row_posts}",
     )
 
     session, order, payloads = _sequence_session()
-    result = session.add_plugin_dialog_rows(
+    result = _detail(session).persist_plugin_rows(
         "/UOF/RowDialog.aspx?GridDataID=1",
         [{
             "txtName": "測試品項",
@@ -318,7 +338,8 @@ def main() -> int:
     confirm_payload = payloads[-1]
     failures += _common.check(
         "明細列 postback 順序為一般欄位→計算→lookup→後置按鈕→確認",
-        result["ok"] and order == ["calculate", "lookup", "after_lookup", "confirm"],
+        result.added == 1 and not result.errors
+        and order == ["calculate", "lookup", "after_lookup", "confirm"],
         f"result={result}, order={order}",
     )
     failures += _common.check(
@@ -329,24 +350,24 @@ def main() -> int:
     )
 
     invalid_session, invalid_order, _ = _sequence_session()
-    invalid = invalid_session.add_plugin_dialog_rows(
+    invalid = _detail(invalid_session).persist_plugin_rows(
         "/UOF/RowDialog.aspx?GridDataID=1",
         [{"txtName": "測試", "_lookups": [{"press": "", "row": None}]}],
     )
     failures += _common.check(
         "不完整 lookup 規格會擋下該列且不送確認",
-        not invalid["ok"] and invalid_order == [] and "_lookups 需要" in invalid["errors"][0],
+        not invalid.added and invalid_order == [] and "_lookups 需要" in invalid.errors[0],
         str(invalid),
     )
 
-    rejected = _rejecting_session().add_plugin_dialog_rows(
+    rejected = _detail(_rejecting_session()).persist_plugin_rows(
         "/UOF/RowDialog.aspx?GridDataID=1", [{"txtName": "測試"}]
     )
     failures += _common.check(
         "row editor 拒絕確認時整合實際 required/server 原因",
-        not rejected["ok"]
-        and "txtItem" in rejected["errors"][0]
-        and "品項已停用" in rejected["errors"][0],
+        not rejected.added
+        and "txtItem" in rejected.errors[0]
+        and "品項已停用" in rejected.errors[0],
         str(rejected),
     )
 

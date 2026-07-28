@@ -372,7 +372,12 @@ class DetailOperation:
                 state = dict(page.state)
             missing = _missing_required_dialog_fields(fields, state)
             if missing:
-                names = "、".join(field.get("id") or field["name"].split("$")[-1] for field in missing)
+                names = "、".join(
+                    f"{field.get('label')}（{field.get('id') or field['name'].split('$')[-1]}）"
+                    if field.get("label")
+                    else field.get("id") or field["name"].split("$")[-1]
+                    for field in missing
+                )
                 errors.append(f"第 {index + 1} 列的必填控制項未提供：{names}，該列未送出")
                 continue
             confirm = dict(state)

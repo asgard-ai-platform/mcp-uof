@@ -6,6 +6,17 @@ from ..._log import eprint as _eprint
 from .constants import _SKIP_HIDDEN_PREFIXES, _DIALOG_OPEN_RE, _etree, _html_fromstring
 
 
+def _is_disabled(element) -> bool:
+    if element is None:
+        return False
+    classes = {name.casefold() for name in (element.get("class") or "").split()}
+    return (
+        element.get("disabled") is not None
+        or element.get("readonly") is not None
+        or "fielddisabled" in classes
+    )
+
+
 def _parse_apply_form_tree(html_text: str) -> list:
     """Parse ApplyFormList.aspx (電子簽核 » 表單申請 tree) into applyable forms.
 
@@ -244,10 +255,10 @@ def _parse_field_blocks(tree, include_dialog_companions: bool = False) -> list:
 
             # Disabled controls ignore posted values; expose the state instead of reporting a
             # value as filled when the server will discard it.
-            disabled = input_el is not None and input_el.get("disabled") is not None
+            disabled = _is_disabled(input_el)
             if not disabled and input_type == "datePicker":
                 di = block.xpath(".//input[contains(@name,'dateInput')]")
-                disabled = bool(di) and di[0].get("disabled") is not None
+                disabled = bool(di) and _is_disabled(di[0])
 
             field: dict = {
                 "code": code,
@@ -381,10 +392,10 @@ def _parse_classic_field_blocks(tree) -> list:
 
             # datePicker's real `disabled` lives on the visible dateInput sub-element, not the
             # hidden trigger input `input_el` resolves to (same quirk as the Telerik parser above).
-            disabled = input_el is not None and input_el.get("disabled") is not None
+            disabled = _is_disabled(input_el)
             if not disabled and input_type == "datePicker":
                 di = sib.xpath(".//input[contains(@name,'dateInput')]")
-                disabled = bool(di) and di[0].get("disabled") is not None
+                disabled = bool(di) and _is_disabled(di[0])
 
             field = {
                 "code": label,
@@ -717,4 +728,3 @@ def _parse_datagrid_columns(dialog_html: str) -> list:
         cols.append({"index": i, "label": label, "input_name": prim,
                      "input_type": itype, "client_state_name": cs_name})
     return cols
-

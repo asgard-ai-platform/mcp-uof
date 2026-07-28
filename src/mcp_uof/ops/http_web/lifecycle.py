@@ -4,6 +4,7 @@ import html
 import json
 import re
 
+from ..._log import eprint as _eprint
 from .constants import _HOMEPAGE_PATH, _etree
 from .parsing import _parse_hidden_fields
 from .payload import _form_state_payload
@@ -148,6 +149,9 @@ class TaskLifecycleOperation:
         guard = self._write_guard(before)
         if guard:
             return guard
+        owner_guard = self._cancel_owner_guard(before)
+        if owner_guard:
+            return owner_guard
         return self._void(task_id, reason)
 
     def _sign(self, task_id: str, approve: bool, comment: str,
@@ -232,7 +236,13 @@ class TaskLifecycleOperation:
         failure = self._response_failure(page, "作廢頁")
         if failure:
             return {"ok": False, "reason": failure}
-        payload = _parse_hidden_fields(self._session._parse(page))
+        tree = self._session._parse(page)
+        if not tree.xpath("//input[@value='rbDeleteApplyForm']"):
+            return {
+                "ok": False,
+                "reason": "作廢頁未提供『作廢表單』權限，不送出作廢指令",
+            }
+        payload = _parse_hidden_fields(tree)
         prefix = "ctl00$ContentPlaceHolder1$"
         payload.update({
             "__EVENTTARGET": "ctl00$MasterPageRadButton1",
@@ -264,14 +274,32 @@ class TaskLifecycleOperation:
 
     def _cancel_owner_guard(self, snapshot: dict) -> dict | None:
         identity = (self._session.session_account or "").strip().casefold()
-        applicant = (snapshot.get("applicant") or "").strip().casefold()
-        if not identity or not applicant:
-            return {"ok": False, "reason": "無法確認目前身份與申請人 ownership，不執行作廢"}
-        if identity != applicant:
+
+        # 登入帳號在簽核歷程顯示字串的最後一組括號內，例如
+        # 「測試專用帳號 employee02(test_account)」。lblApplicant 只有「別名 (職稱)」，
+        # 不能作為帳號來源。
+        applicant_account = ""
+        shown = (snapshot.get("applicant") or "").strip()
+        match = re.search(r"\(([^()]+)\)\s*$", shown)
+        if match:
+            candidate = match.group(1).strip()
+            if (
+                candidate
+                and not re.search(r"[\s()]", candidate)
+                and candidate in shown
+            ):
+                applicant_account = candidate.casefold()
+
+        if identity and applicant_account and identity != applicant_account:
             return {
                 "ok": False,
                 "reason": "目前身份不是此表單申請人，不執行作廢",
             }
+        if not identity or not applicant_account:
+            _eprint(
+                "[ops.http_web] 無法解析 Cancel ownership，"
+                "交由 UOF 作廢頁 capability 判定"
+            )
         return None
 
     @staticmethod

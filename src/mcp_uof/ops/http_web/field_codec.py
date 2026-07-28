@@ -92,4 +92,4 @@ class FieldCodec:
             payload[field.input_name] = posted
         else:
             payload.pop(field.input_name, None)
-        return EncodeResult(filled_value=posted if enabled else "未勾選")
+        return EncodeResult(filled_value=posted if enabled else "")

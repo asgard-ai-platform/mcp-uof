@@ -117,10 +117,18 @@ class SubmissionOperation:
                     detail_page = detail_result.page
                     tree2 = detail_page.tree
                     payload.update(detail_page.state)
-                    errors.extend(f"明細 {code}: {note}" for note in detail_result.notes)
-                    errors.extend(f"明細 {code}: {error}" for error in detail_result.errors)
+                    detail_label = fb.get("label") or code
+                    errors.extend(
+                        f"明細「{detail_label}」：{note}"
+                        for note in detail_result.notes
+                    )
                     if not detail_result.ok:
-                        blocking.append(f"明細「{fb.get('label') or code}」未完整")
+                        blocking.extend(
+                            f"明細「{detail_label}」：{error}"
+                            for error in detail_result.errors
+                        )
+                        if not detail_result.errors:
+                            blocking.append(f"明細「{detail_label}」未完整")
                         continue
                     _mark_filled(filled, code, fb, detail_result.summary)
                     continue

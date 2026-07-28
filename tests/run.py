@@ -21,8 +21,11 @@ PYTHON = sys.executable
 SKIP_CODE = 77
 
 TIERS = {
-    "smoke": ["smoke/test_imports.py", "smoke/test_binding.py", "smoke/test_http_web_regressions.py",
-              "smoke/test_plugin_detail_rows.py",
+    "smoke": ["smoke/test_imports.py", "smoke/test_binding.py", "smoke/test_mcp_contract.py",
+              "smoke/test_webforms_runtime.py", "smoke/test_http_web_regressions.py",
+              "smoke/test_plugin_detail_rows.py", "smoke/test_detail_operation.py",
+              "smoke/test_form_submission_objects.py", "smoke/test_apply_form_web.py",
+              "smoke/test_task_lifecycle.py", "smoke/test_session_lifecycle.py",
               "smoke/test_session_store.py", "smoke/test_browser_login.py",
               "smoke/test_auth_flow.py"],
     "mounted": ["mounted/test_mcp_stdio.py"],

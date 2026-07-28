@@ -94,5 +94,7 @@ class FormSchema:
     ) -> tuple[FormField, ...]:
         return tuple(
             field for field in self.fields
-            if field.required and field.code not in filled and field.code not in invalid_codes
+            if field.required
+            and field.code not in invalid_codes
+            and not str(filled.get(field.code, "")).strip()
         )
