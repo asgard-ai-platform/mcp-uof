@@ -56,6 +56,13 @@ def main() -> int:
         <span class="TitleFont">權限欄位</span><span class="FieldHide">(PERMISSION)</span>
         <div class="fieldPadding"><input class="fieldDisabled" name="ctl$PERMISSION" type="text"></div>
       </td></tr></table>
+      <table class="fieldWidth"><tr><td>
+        <span class="TitleFont">轉採購</span><span class="FieldHide">(TO_PO)</span>
+        <div class="fieldPadding"><span title="具填寫權限人員：採購管理員">
+          <input id="ctl00_versionFieldUC5_cbxList_0" name="ctl$TO_PO" type="checkbox" value="Y">
+        </span></div>
+      </td></tr></table>
+      <script>SetCheckboxEnabled_ctl00_versionFieldUC5_cbxList('False');</script>
     """)
     schema = FormSchema.parse(tree)
     failures += _common.check(
@@ -63,7 +70,9 @@ def main() -> int:
         schema.find("date").required
         and schema.find("地點").options[0].value == "N"
         and schema.find("LOCKED").disabled
-        and schema.find("PERMISSION").disabled,
+        and schema.find("PERMISSION").disabled
+        and schema.find("TO_PO").disabled
+        and schema.find("TO_PO").input_title == "具填寫權限人員：採購管理員",
     )
 
     classic = FormSchema.parse(_html_fromstring("""
@@ -103,7 +112,7 @@ def main() -> int:
         and unchecked_result.filled_value == ""
         and "ctl$ENABLED" not in payload
         and invalid_result.blocking
-        and disabled_result.warning
+        and disabled_result.blocking
         and "ctl$LOCKED" not in payload,
     )
 

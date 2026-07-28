@@ -6,15 +6,48 @@ from ..._log import eprint as _eprint
 from .constants import _SKIP_HIDDEN_PREFIXES, _DIALOG_OPEN_RE, _etree, _html_fromstring
 
 
-def _is_disabled(element) -> bool:
+def _script_disabled_control_ids(tree) -> set[str]:
+    """Return DOM id prefixes disabled by UOF's server-rendered client calls."""
+    result = set()
+    for script in tree.xpath("//script"):
+        source = "".join(script.itertext())
+        result.update(re.findall(
+            r"\bSet[A-Za-z0-9]*Enabled_([A-Za-z0-9_]+)\s*\(\s*['\"]False['\"]\s*\)",
+            source,
+            re.IGNORECASE,
+        ))
+    return result
+
+
+def _is_disabled(element, script_disabled_ids: set[str] | None = None) -> bool:
     if element is None:
         return False
     classes = {name.casefold() for name in (element.get("class") or "").split()}
-    return (
+    if (
         element.get("disabled") is not None
         or element.get("readonly") is not None
         or "fielddisabled" in classes
+        or "aspnetdisabled" in classes
+    ):
+        return True
+    if script_disabled_ids is None:
+        script_disabled_ids = _script_disabled_control_ids(element.getroottree())
+    control_id = element.get("id") or (element.get("name") or "").replace("$", "_")
+    return any(
+        control_id == target or control_id.startswith(target + "_")
+        for target in script_disabled_ids
     )
+
+
+def _control_title(element) -> str:
+    """Read the nearest title, including permission hints placed on a wrapper."""
+    current = element
+    while current is not None:
+        title = (current.get("title") or "").strip()
+        if title:
+            return title
+        current = current.getparent()
+    return ""
 
 
 def _parse_apply_form_tree(html_text: str) -> list:
@@ -113,6 +146,7 @@ def _parse_field_blocks(tree, include_dialog_companions: bool = False) -> list:
     If include_dialog_companions=True, also populate display_name and hidden_name for dialog fields.
     """
     fields = []
+    script_disabled_ids = _script_disabled_control_ids(tree)
     blocks = tree.xpath("//table[contains(@class,'fieldWidth')]")
     for block in blocks:
         try:
@@ -187,7 +221,7 @@ def _parse_field_blocks(tree, include_dialog_companions: bool = False) -> list:
                 input_name = input_el.get("name") or ""
                 input_class = input_el.get("class") or ""
                 input_type_attr = (input_el.get("type") or "").lower()
-                input_title = input_el.get("title") or ""
+                input_title = _control_title(input_el)
 
             # Dialog URL from onclick open2(...)
             dialog_url = ""
@@ -255,10 +289,10 @@ def _parse_field_blocks(tree, include_dialog_companions: bool = False) -> list:
 
             # Disabled controls ignore posted values; expose the state instead of reporting a
             # value as filled when the server will discard it.
-            disabled = _is_disabled(input_el)
+            disabled = _is_disabled(input_el, script_disabled_ids)
             if not disabled and input_type == "datePicker":
                 di = block.xpath(".//input[contains(@name,'dateInput')]")
-                disabled = bool(di) and _is_disabled(di[0])
+                disabled = bool(di) and _is_disabled(di[0], script_disabled_ids)
 
             field: dict = {
                 "code": code,
@@ -318,6 +352,7 @@ def _parse_classic_field_blocks(tree) -> list:
     `apply_form_web` also accepts as a match key.
     """
     fields = []
+    script_disabled_ids = _script_disabled_control_ids(tree)
     for td in tree.xpath("//td[@class='ul'][@align='right']"):
         try:
             raw = "".join(td.itertext())
@@ -392,10 +427,10 @@ def _parse_classic_field_blocks(tree) -> list:
 
             # datePicker's real `disabled` lives on the visible dateInput sub-element, not the
             # hidden trigger input `input_el` resolves to (same quirk as the Telerik parser above).
-            disabled = _is_disabled(input_el)
+            disabled = _is_disabled(input_el, script_disabled_ids)
             if not disabled and input_type == "datePicker":
                 di = sib.xpath(".//input[contains(@name,'dateInput')]")
-                disabled = bool(di) and _is_disabled(di[0])
+                disabled = bool(di) and _is_disabled(di[0], script_disabled_ids)
 
             field = {
                 "code": label,
@@ -403,7 +438,7 @@ def _parse_classic_field_blocks(tree) -> list:
                 "required": required,
                 "input_type": input_type,
                 "input_name": input_name or "",
-                "input_title": "",
+                "input_title": _control_title(input_el),
                 "dialog_url": "",
                 "options": options,
                 "disabled": disabled,
@@ -473,7 +508,7 @@ def _control_label(el) -> tuple:
 
 
 
-def _choice_controls(tree, keep) -> list:
+def _choice_controls(tree, keep, script_disabled_ids: set[str] | None = None) -> list:
     """Radio groups and checkboxes, in the same shape as the text/select controls.
 
     A radio group collapses into one control whose `options` are its buttons, matching how a
@@ -499,7 +534,7 @@ def _choice_controls(tree, keep) -> list:
             "id": name.split("$")[-1],
             "label": label,
             "required": required,
-            "readonly": el.get("disabled") is not None,
+            "readonly": _is_disabled(el, script_disabled_ids),
             "hidden": "HideMe" in (el.get("class") or ""),
             "lookup_buttons": [],
         }
@@ -512,6 +547,8 @@ def _choice_controls(tree, keep) -> list:
             g = dict(base, type="radio", options=[], value="")
             groups[name] = g
             out.append(g)
+        else:
+            g["readonly"] = g["readonly"] or base["readonly"]
         g["options"].append({"value": el.get("value") or "", "text": _opt_text(el)})
         if el.get("checked") is not None:
             g["value"] = el.get("value") or ""
@@ -543,6 +580,7 @@ def _parse_inline_controls(tree, uc_prefix: str) -> list:
         return re.sub(r"\s+", " ", "".join(el.itertext())).replace("\xa0", " ").strip()
 
     out = []
+    script_disabled_ids = _script_disabled_control_ids(tree)
     for el in tree.xpath("//input[@type='text'] | //select | //textarea"):
         name = el.get("name") or ""
         if not _matches_uc_prefix(name, uc_prefix) or name.startswith("__"):
@@ -556,11 +594,15 @@ def _parse_inline_controls(tree, uc_prefix: str) -> list:
             "required": required,
             "type": "select" if el.tag == "select" else (el.tag if el.tag == "textarea" else "text"),
             "options": [{"value": o.get("value") or "", "text": _t(o)} for o in el.xpath(".//option")],
-            "readonly": el.get("readonly") is not None or el.get("disabled") is not None,
+            "readonly": _is_disabled(el, script_disabled_ids),
             "hidden": "HideMe" in (el.get("class") or ""),
             "lookup_buttons": [],
         })
-    out.extend(_choice_controls(tree, lambda n: _matches_uc_prefix(n, uc_prefix)))
+    out.extend(_choice_controls(
+        tree,
+        lambda n: _matches_uc_prefix(n, uc_prefix),
+        script_disabled_ids,
+    ))
     return out
 
 
@@ -578,6 +620,7 @@ def _parse_dialog_fields(dialog_html: str) -> list:
     the "real" one is form knowledge — a skill's call, not ours.
     """
     tree = _html_fromstring(dialog_html)
+    script_disabled_ids = _script_disabled_control_ids(tree)
     for bad in tree.xpath("//script | //style"):
         bad.getparent().remove(bad)
 
@@ -605,14 +648,14 @@ def _parse_dialog_fields(dialog_html: str) -> list:
             "required": required,
             "type": "select" if el.tag == "select" else (el.tag if el.tag == "textarea" else "text"),
             "options": [{"value": v, "text": t} for v, t in options],
-            "readonly": el.get("readonly") is not None or el.get("disabled") is not None,
+            "readonly": _is_disabled(el, script_disabled_ids),
             "hidden": "HideMe" in cls or "display:none" in style,
             "lookup_buttons": [
                 re.split(r"[_$]", b.get("id") or b.get("name") or "")[-1]
                 for b in (row.xpath(".//input[@type='submit'] | .//input[@type='button']") if row is not None else [])
             ],
         })
-    out.extend(_choice_controls(tree, lambda n: True))
+    out.extend(_choice_controls(tree, lambda n: True, script_disabled_ids))
     return out
 
 

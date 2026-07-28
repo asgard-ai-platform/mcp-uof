@@ -211,11 +211,15 @@ class HttpWebBackend(OpsBackend):
             mark = "＊" if f["required"] else " "
             code = f["code"] or "—"
             hint = fill_hint.get(f["input_type"], f["input_type"])
+            readonly = ""
+            if f.get("disabled"):
+                reason = f.get("input_title") or ""
+                readonly = f" [唯讀：{reason}]" if reason else " [唯讀]"
             opts = f.get("options") or []
             opt_str = ""
             if opts:
                 opt_str = "　可選值：" + "／".join(o["value"] for o in opts)
-            lines.append(f"  {mark} [{code}] {f['label']} 〈{f['input_type']}〉 — {hint}{opt_str}")
+            lines.append(f"  {mark} [{code}] {f['label']} 〈{f['input_type']}〉{readonly} — {hint}{opt_str}")
             if f["input_type"] == "dataGrid":
                 cols = f.get("columns") or []
                 if cols:

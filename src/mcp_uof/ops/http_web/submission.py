@@ -85,7 +85,7 @@ class SubmissionOperation:
             iname = fb.get("input_name") or ""
 
             if field.disabled:
-                errors.append(codec.encode(field, value, payload).warning)
+                blocking.append(codec.encode(field, value, payload).blocking)
                 continue
 
             if itype == "dataGrid":

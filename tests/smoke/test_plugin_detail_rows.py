@@ -9,7 +9,9 @@ import _common
 _common.ensure_src_on_path()
 
 from mcp_uof.ops.http_web import HttpSession, HttpWebBackend  # noqa: E402
+from mcp_uof.ops.http_web.constants import _html_fromstring  # noqa: E402
 from mcp_uof.ops.http_web.details import DetailOperation  # noqa: E402
+from mcp_uof.ops.http_web.payload import _fill_control_value  # noqa: E402
 from mcp_uof.ops.http_web.runtime import WebFormsRuntime  # noqa: E402
 from mcp_uof.ops.http_web.parsing import (  # noqa: E402
     _find_row_editor_openers,
@@ -218,16 +220,31 @@ def main() -> int:
 
     nested_html = """
     <table><tr><td>料號</td><td>
-      <input type="text" name="ctl00$txtItem" id="ctl00_txtItem">
+      <input type="text" name="ctl00$txtItem" id="ctl00_txtItem" class="aspNetDisabled">
       <input type="button" name="ctl00$btnItem"
         onclick="$uof.dialog.open2('/UOF/ItemPicker.aspx?q=1&amp;mode=all')">
+    </td></tr><tr><td>轉採購</td><td>
+      <input type="checkbox" name="ctl00$cbxList$0" id="ctl00_cbxList_0" value="Y">
+      <label for="ctl00_cbxList_0">是</label>
     </td></tr></table>
+    <script>SetCheckboxEnabled_ctl00_cbxList('False');</script>
     """
     fields = _parse_dialog_fields(nested_html)
     target = _lookup_dialog_target(nested_html, "btnItem")
+    readonly_payload = {}
+    readonly_error = _fill_control_value(
+        readonly_payload,
+        _html_fromstring(nested_html),
+        "ctl00$cbxList$0",
+        "Y",
+    )
     failures += _common.check(
         "列內控制項能解析巢狀 picker 與開窗按鈕",
         fields[0]["lookup_buttons"] == ["btnItem"]
+        and fields[0]["readonly"]
+        and fields[1]["readonly"]
+        and readonly_error
+        and "ctl00$cbxList$0" not in readonly_payload
         and target == "/UOF/ItemPicker.aspx?q=1&mode=all",
         f"fields={fields}, target={target}",
     )

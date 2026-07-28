@@ -3,6 +3,8 @@ import html
 import re
 from typing import Optional
 
+from .parsing import _is_disabled
+
 
 def _form_state_payload(tree) -> dict:
     """Serialize a rendered ASP.NET form's *current* state like a browser would.
@@ -139,6 +141,8 @@ def _fill_control_value(payload: dict, tree, name: str, value) -> Optional[str]:
     """
     sel = tree.xpath(f"//select[@name={name!r}]")
     if sel:
+        if _is_disabled(sel[0]):
+            return f"欄位為唯讀，值『{value}』無法寫入"
         opt = next((o for o in sel[0].xpath(".//option")
                     if (o.get("value") or "") == str(value)
                     or "".join(o.itertext()).strip() == str(value)), None)
@@ -148,6 +152,8 @@ def _fill_control_value(payload: dict, tree, name: str, value) -> Optional[str]:
         return None
     radios = tree.xpath(f"//input[@type='radio'][@name={name!r}]")
     if radios:
+        if any(_is_disabled(el) for el in radios):
+            return f"欄位為唯讀，值『{value}』無法寫入"
         # a radio group posts one name=value; callers naturally supply the visible label
         def _lbl(el):
             lid = el.get("id") or ""
@@ -163,6 +169,9 @@ def _fill_control_value(payload: dict, tree, name: str, value) -> Optional[str]:
             return f"值『{value}』不是有效選項，只能填：{allowed}"
         payload[name] = hit.get("value") or ""
         return None
+    controls = tree.xpath(f"//input[@name={name!r}] | //textarea[@name={name!r}]")
+    if controls and _is_disabled(controls[0]):
+        return f"欄位為唯讀，值『{value}』無法寫入"
     payload[name] = str(value)
     sv = str(value).strip()
     if re.fullmatch(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", sv):
@@ -179,5 +188,4 @@ def _fill_control_value(payload: dict, tree, name: str, value) -> Optional[str]:
         except ValueError:
             pass
     return None
-
 

@@ -24,7 +24,10 @@ class FieldCodec:
     def encode(self, field: FormField, value: Any, payload: dict) -> EncodeResult:
         label = field.label or field.code
         if field.disabled:
-            return EncodeResult(warning=f"欄位 {field.code}（{field.label}）在此表單為停用狀態、起單時不可填，已略過")
+            reason = f"（{field.input_title}）" if field.input_title else ""
+            return EncodeResult(
+                blocking=f"欄位「{label}」為唯讀{reason}，值『{value}』無法寫入"
+            )
         if not field.input_name:
             return EncodeResult(blocking=f"欄位「{label}」找不到可寫入的控制項（解析器缺口），值『{value}』無法寫入")
         if field.input_type == "datePicker":

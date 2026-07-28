@@ -150,6 +150,27 @@ def main() -> int:
         _payload_diff(posts, golden["posts"]),
     )
 
+    blocked = ScriptedHttpSession(
+        _opening_steps(meta, firstsite_html),
+        form_ids=(meta["fid"], meta["vid"]),
+        virtual_path="/UOF",
+    )
+    blocked_fields = dict(golden["fields"], ET14="無")
+    blocked_result = blocked.apply_form_web(
+        meta["form_version_id"], blocked_fields, submit=True
+    )
+    blocked.assert_finished()
+    failures += _common.check(
+        "caller 填入唯讀欄位時在任何寫入 POST 前阻擋",
+        not blocked_result["ok"]
+        and any(
+            "切結說明" in error and "不允許修改" in error
+            for error in blocked_result["errors"]
+        )
+        and not [request for request in blocked.requests if request.method == "POST"],
+        str(blocked_result),
+    )
+
     complete, first_site_send = _complete_session(meta, firstsite_html)
     completed = complete.apply_form_web(meta["form_version_id"], golden["fields"], submit=True)
     complete.assert_finished()
