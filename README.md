@@ -27,9 +27,21 @@ This project targets UOF first-generation web flows, driven over httpx.
 
 ## Quick Start
 
-### Install From Source
+### Install
 
-Install and run the current source:
+Install from PyPI:
+
+```bash
+pip install mcp-uof
+```
+
+Or run without installing:
+
+```bash
+uvx --from mcp-uof mcp-uof
+```
+
+To install and run the current source instead:
 
 ```bash
 git clone https://github.com/asgard-ai-platform/mcp-uof.git

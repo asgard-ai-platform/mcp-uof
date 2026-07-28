@@ -27,7 +27,25 @@
 
 ## 快速開始
 
+### 安裝
+
+從 PyPI 安裝：
+
 ```bash
+pip install mcp-uof
+```
+
+或不安裝、直接執行：
+
+```bash
+uvx --from mcp-uof mcp-uof
+```
+
+若要使用目前原始碼：
+
+```bash
+git clone https://github.com/asgard-ai-platform/mcp-uof.git
+cd mcp-uof
 uv sync
 cp .env.example .env   # 至少填入 UOF_BASE_URL（帳密非必填）
 
@@ -46,8 +64,7 @@ uv run mcp-uof         # 以 stdio 啟動 MCP Server
 {
   "mcpServers": {
     "uof": {
-      "command": "uv",
-      "args": ["--directory", "/absolute/path/to/mcp-uof", "run", "mcp-uof"],
+      "command": "mcp-uof",
       "env": {
         "UOF_BASE_URL": "https://your-uof-domain.com/VirtualPath"
       }
